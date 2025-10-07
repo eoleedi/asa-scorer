@@ -1,6 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cu124/
 scikit-learn==1.4.0
-torch==1.11.0
-torchaudio 
+torch==2.6.0
+torchaudio==2.6.0
 numpy
 tqdm
 matplotlib
