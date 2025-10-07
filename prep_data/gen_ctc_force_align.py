@@ -3,7 +3,6 @@ import os
 import sys
 import torch
 import torchaudio
-from transformers import Wav2Vec2Model, HubertModel
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from tqdm import tqdm

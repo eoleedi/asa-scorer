@@ -44,8 +44,8 @@ te_dataloader = DataLoader(te_dataset, batch_size=batch_size, shuffle=False)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # wav2vec2 = torchaudio.pipelines.WAV2VEC2_LARGE.get_model()
-wav2vec2 = torchaudio.pipelines.HUBERT_LARGE.get_model()
-wav2vec2 = wav2vec2.to(device)
+model = torchaudio.pipelines.HUBERT_LARGE.get_model()
+model = model.to(device)
 
 
 def extract_feature(dataLoader, dataset_type):
@@ -65,7 +65,7 @@ def extract_feature(dataLoader, dataset_type):
         audio = audio.view(audio.size(0), -1)
 
         with torch.inference_mode():
-            audio_embedding, _ = wav2vec2.extract_features(audio)
+            audio_embedding, _ = model.extract_features(audio)
         # print(audio_embedding.shape)
 
         for i, feats in enumerate(audio_embedding):
