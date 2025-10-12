@@ -66,19 +66,19 @@ class FluencyScorerNoclu(nn.Module):
     ''' 
         A model for fluency score prediction without using cluster.
     '''
-    def __init__(self, input_dim: int, embed_dim: int):
+    def __init__(self, input_dim: int, embed_dim: int, scorer_num: int = 1):
         super().__init__()
         self.preprocessing = nn.Sequential(
             nn.Linear(input_dim, embed_dim),
             nn.LayerNorm(embed_dim),
             nn.Tanh(),
         )
-        self.scorer = BiLSTMScorer(embed_dim, embed_dim, 2)
+        self.scorers = nn.ModuleList([BiLSTMScorer(embed_dim, embed_dim, 2) for _ in range(scorer_num)])
 
-    def forward(self, x):
+    def forward(self, x) -> torch.Tensor | list:
         ''' 
         x: extract audio features
-        return: a pred score
+        return: a pred score (if multiple scorers, return a list of pred scores)
         '''
         device = x.device
         # step 1: audio features preprocessing
@@ -92,7 +92,8 @@ class FluencyScorerNoclu(nn.Module):
         new_audio_embedding_tensor = new_audio_embedding_tensor * mask
 
         # step 2: make a score directly
-        pred = self.scorer(x=new_audio_embedding_tensor, seq_lengths=seq_lengths)
+        pred = [scorer(x=new_audio_embedding_tensor, seq_lengths=seq_lengths) for scorer in self.scorers]
+        pred = torch.cat(pred, dim=1) if len(pred) > 1 else pred[0]
 
         return pred
 
@@ -100,7 +101,7 @@ class FluencyScorer(nn.Module):
     ''' 
         The main model for fluency score prediction with using cluster.
     '''
-    def __init__(self, input_dim, embed_dim, clustering_dim=6):
+    def __init__(self, input_dim, embed_dim, clustering_dim=6, scorer_num=1):
         super().__init__()
         self.preprocessing = nn.Sequential(
             nn.Linear(input_dim, embed_dim),
@@ -108,7 +109,7 @@ class FluencyScorer(nn.Module):
             nn.Tanh(),
         )
         self.cluster_embed = nn.Embedding(50 + 1, clustering_dim, padding_idx=0)
-        self.scorer = BiLSTMScorer(embed_dim+clustering_dim, embed_dim, 2)
+        self.scorers = nn.ModuleList([BiLSTMScorer(embed_dim + clustering_dim, embed_dim, 2) for _ in range(scorer_num)])
 
     def forward(self, x, cluster_id):
         ''' 
@@ -130,5 +131,7 @@ class FluencyScorer(nn.Module):
         audio_features = audio_features * mask
 
         # step 3: make a score
-        pred = self.scorer(x=audio_features, seq_lengths=seq_lengths)
+        pred = [scorer(x=audio_features, seq_lengths=seq_lengths) for scorer in self.scorers]
+        # Stack all predictions into a single tensor
+        pred = torch.cat(pred, dim=1) if len(pred) > 1 else pred[0]
         return pred

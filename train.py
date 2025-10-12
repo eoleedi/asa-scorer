@@ -65,13 +65,27 @@ def cluster_pred(feats, model):
     cluster_index_tensor = torch.stack(cluster_index_list, dim=0)
     return cluster_index_tensor
 
-def draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr_values, epochs_list, exp_dir):
+def draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr_values, epochs_list, exp_dir, aspect_names):
+    """
+    Draw training and validation curves.
+    
+    Args:
+        train_mse_values: list of average training MSE per epoch
+        val_mse_values: list of average validation MSE per epoch
+        train_corr_values: list of average training correlation per epoch
+        val_corr_values: list of average validation correlation per epoch
+        epochs_list: list of epoch numbers
+        exp_dir: experiment directory to save the figure
+        aspect_names: list of aspect names (e.g., ['flu', 'psd'])
+    """
+    aspect_title = ' + '.join([a.upper() for a in aspect_names]) if len(aspect_names) > 1 else aspect_names[0].upper()
+    
     plt.figure(figsize=(10, 5))
 
     plt.subplot(1, 2, 1)
     plt.plot(epochs_list, train_mse_values, label='Training MSE')
     plt.plot(epochs_list, val_mse_values, label='Validation MSE')
-    plt.title('Training and Validation MSE')
+    plt.title(f'Training and Validation MSE ({aspect_title})')
     plt.xlabel('Epoch')
     plt.ylabel('MSE')
     plt.legend()
@@ -79,7 +93,7 @@ def draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr
     plt.subplot(1, 2, 2)
     plt.plot(epochs_list, train_corr_values, label='Training Correlation')
     plt.plot(epochs_list, val_corr_values, label='Validation Correlation')
-    plt.title('Training and Validation Correlation')
+    plt.title(f'Training and Validation Correlation ({aspect_title})')
     plt.xlabel('Epoch')
     plt.ylabel('Correlation')
     plt.legend()
@@ -90,15 +104,38 @@ def draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr
 
     plt.tight_layout()
     plt.savefig(f"{exp_dir}/train.jpg")
+    plt.close()
 
-def gen_result_header():
+def gen_result_header(aspect_names):
+    """
+    Generate CSV header based on the aspects being trained.
+    
+    Args:
+        aspect_names: list of aspect names (e.g., ['flu', 'psd'])
+    """
+    aspect_name_map = {
+        'acc': 'accuracy',
+        'cpn': 'completeness',
+        'flu': 'fluency',
+        'psd': 'prosody',
+        'ttl': 'total'
+    }
+    
     utt_header_set = ['utt_train_mse', 'utt_train_pcc', 'utt_test_mse', 'utt_test_pcc']
-    utt_header_score = ['fluency']
+    utt_header_scores = [aspect_name_map.get(aspect, aspect) for aspect in aspect_names]
+    
+    # Generate headers for each aspect
     utt_header = []
     for dset in utt_header_set:
-        utt_header = utt_header + [dset+'_'+x for x in utt_header_score]
-
-    header = ['epoch', 'learning_rate'] + utt_header
+        utt_header = utt_header + [dset + '_' + x for x in utt_header_scores]
+    
+    # Add average headers if multiple aspects
+    if len(aspect_names) > 1:
+        avg_header = ['utt_train_mse_avg', 'utt_train_pcc_avg', 'utt_test_mse_avg', 'utt_test_pcc_avg']
+        header = ['epoch', 'learning_rate'] + avg_header + utt_header
+    else:
+        header = ['epoch', 'learning_rate'] + utt_header
+    
     return header
 
 def train(audio_model, train_loader, test_loader, args):
@@ -106,6 +143,17 @@ def train(audio_model, train_loader, test_loader, args):
     torch.cuda.set_device(gpu_index)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print('running on ' + str(device))
+
+    # Get aspect information early for use throughout training
+    aspect_names = args.aspect.split(',')
+    num_aspects = len(aspect_names)
+    aspect_name_map = {
+        'acc': 'Accuracy',
+        'cpn': 'Completeness',
+        'flu': 'Fluency',
+        'psd': 'Prosody',
+        'ttl': 'Total'
+    }
 
     train_mse_values, train_corr_values = [], []
     val_mse_values, val_corr_values = [], []
@@ -135,7 +183,15 @@ def train(audio_model, train_loader, test_loader, args):
 
     print("current #steps=%s, #epochs=%s" % (global_step, epoch))
     print("start training...")
-    result = np.zeros([args.n_epochs, 7])
+    
+    # Calculate result array size based on number of aspects
+    if num_aspects > 1:
+        # epoch, lr, avg(train_mse, train_corr, test_mse, test_corr), per-aspect(train_mse, train_corr, test_mse, test_corr)
+        result_cols = 2 + 4 + (4 * num_aspects)
+    else:
+        # epoch, lr, train_mse, train_corr, test_mse, test_corr
+        result_cols = 2 + (4 * num_aspects)
+    result = np.zeros([args.n_epochs, result_cols])
     
     while epoch < args.n_epochs:
         audio_model.train()
@@ -176,9 +232,12 @@ def train(audio_model, train_loader, test_loader, args):
             elif args.model == 'fluScorerNoclu':
                 pred = audio_model(feats)
 
-            flu_label = torch.unsqueeze(utt_label[:, args.aspect_idx], 1)
-            flu_label = flu_label.to(device, non_blocking=True)
-            loss = loss_fn(pred, flu_label)
+            if isinstance(args.aspect_indices, list):
+                labels = utt_label[:, args.aspect_indices]
+            else:
+                labels = torch.unsqueeze(utt_label[:, args.aspect_indices], 1)
+            labels = labels.to(device, non_blocking=True)
+            loss = loss_fn(pred, labels)
 
             optimizer.zero_grad()
             loss.backward()
@@ -189,8 +248,8 @@ def train(audio_model, train_loader, test_loader, args):
 
         # ensemble results
         # don't save prediction for the training set
-        tr_mse, tr_corr = validate(audio_model, train_loader, args, -1, kmeans_model)
-        te_mse, te_corr = validate(audio_model, test_loader, args, best_mse, kmeans_model)
+        tr_mse, tr_corr, tr_mse_list, tr_corr_list = validate(audio_model, train_loader, args, -1, kmeans_model)
+        te_mse, te_corr, te_mse_list, te_corr_list = validate(audio_model, test_loader, args, best_mse, kmeans_model)
 
         train_mse_values.append(tr_mse)
         train_corr_values.append(tr_corr)
@@ -198,10 +257,37 @@ def train(audio_model, train_loader, test_loader, args):
         val_corr_values.append(te_corr)
         epochs_list.append(epoch)
 
-        print('Fluency: Train MSE: {:.3f}, CORR: {:.3f}'.format(tr_mse.item(), tr_corr))
-        print(f'Fluency: Test MSE: {te_mse.item():.3f}, {bcolors.YELLOW}CORR: {te_corr:.3f}{bcolors.ENDC}')
+        # Handle both tensor and scalar returns from validate
+        tr_mse_val = tr_mse.item() if isinstance(tr_mse, torch.Tensor) else tr_mse
+        te_mse_val = te_mse.item() if isinstance(te_mse, torch.Tensor) else te_mse
+        
+        # Print overall metrics
+        print('Overall: Train MSE: {:.3f}, CORR: {:.3f}'.format(tr_mse_val, tr_corr))
+        print(f'Overall: Test MSE: {te_mse_val:.3f}, {bcolors.YELLOW}CORR: {te_corr:.3f}{bcolors.ENDC}')
+        
+        # Print per-aspect metrics (always available as lists)
+        if len(aspect_names) > 1:
+            print('\nPer-aspect metrics:')
+        for i, aspect in enumerate(aspect_names):
+            full_name = aspect_name_map.get(aspect, aspect.upper())
+            if len(aspect_names) > 1:
+                print(f'  {full_name}: Train MSE: {tr_mse_list[i]:.3f}, CORR: {tr_corr_list[i]:.3f} | '
+                      f'Test MSE: {te_mse_list[i]:.3f}, {bcolors.CYAN}CORR: {te_corr_list[i]:.3f}{bcolors.ENDC}')
 
-        result[epoch, :6] = [epoch, optimizer.param_groups[0]['lr'], tr_mse, tr_corr, te_mse, te_corr]
+        # Save results to array
+        if len(aspect_names) > 1:
+            # Save: epoch, lr, avg metrics, then per-aspect metrics
+            result_row = [epoch, optimizer.param_groups[0]['lr'], 
+                         tr_mse_val, tr_corr, te_mse_val, te_corr]
+            # Add per-aspect metrics in order: train_mse, train_corr, test_mse, test_corr for each aspect
+            for i in range(num_aspects):
+                result_row.extend([tr_mse_list[i], tr_corr_list[i], te_mse_list[i], te_corr_list[i]])
+            result[epoch, :] = result_row
+        else:
+            # Single aspect: epoch, lr, train_mse, train_corr, test_mse, test_corr
+            result[epoch, :] = [epoch, optimizer.param_groups[0]['lr'], 
+                               tr_mse_list[0], tr_corr_list[0], te_mse_list[0], te_corr_list[0]]
+        
         print('-------------------validation finished-------------------')
 
         if te_mse < best_mse:
@@ -219,8 +305,8 @@ def train(audio_model, train_loader, test_loader, args):
         print('Epoch-{0} lr: {1}'.format(epoch, optimizer.param_groups[0]['lr']))
         epoch += 1
 
-    draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr_values, epochs_list, exp_dir)
-    header = ','.join(gen_result_header())
+    draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr_values, epochs_list, exp_dir, aspect_names)
+    header = ','.join(gen_result_header(aspect_names))
     np.savetxt(exp_dir + '/result.csv', result, delimiter=',', header=header, comments='')
 
 def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
@@ -257,20 +343,23 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
 
             feats = feats.to(device)
             if args.model == 'fluScorer' or args.model == 'flu_TFR':
-                flu_score = audio_model(feats, cluster_index)
+                score = audio_model(feats, cluster_index)
             elif args.model == 'fluScorerNoclu':
-                flu_score = audio_model(feats)
-            
-            flu_score = flu_score.to('cpu').detach()
-            flu_label = torch.unsqueeze(torch.unsqueeze(utt_label[:, args.aspect_idx], 1), 1)
+                score = audio_model(feats)
 
-            A_flu.append(flu_score)
-            A_flu_target.append(flu_label)
+            score = score.to('cpu').detach()
+            if isinstance(args.aspect_indices, list):
+                labels = utt_label[:, args.aspect_indices]
+            else:
+                labels = torch.unsqueeze(utt_label[:, args.aspect_indices], 1)
+
+            A_flu.append(score)
+            A_flu_target.append(labels)
 
         A_flu, A_flu_target = torch.cat(A_flu), torch.cat(A_flu_target)
 
         # get the scores
-        flu_mse, flu_corr = valid_flu(A_flu, A_flu_target)
+        flu_mse, flu_corr, mse_list, corr_list = valid_flu(A_flu, A_flu_target)
 
         if flu_mse < best_mse:
             print('\033[94mnew best flu mse {:.3f}, now saving predictions.\033[0m'.format(flu_mse))
@@ -285,18 +374,49 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
 
             np.save(args.exp_dir + '/preds/flu_pred.npy', A_flu)
 
-    return flu_mse, flu_corr
+    return flu_mse, flu_corr, mse_list, corr_list
 
 def valid_flu(audio_output, target):
-    valid_token_pred = audio_output.view(-1).numpy()
-    valid_token_target = target.view(-1).numpy()
-    # print(valid_token_pred)
-    # print(valid_token_target)
-
-    valid_token_mse = np.mean((valid_token_pred - valid_token_target)**2)
-    corr_matrix = np.corrcoef(valid_token_pred, valid_token_target)
-    corr = corr_matrix[0, 1].item()
-    return valid_token_mse, corr
+    """
+    Validate fluency predictions, supporting multiple aspects.
+    
+    Args:
+        audio_output: (batch_size, num_aspects) or (batch_size, 1)
+        target: (batch_size, num_aspects) or (batch_size, 1)
+    
+    Returns:
+        mse: average MSE across all aspects
+        corr: average correlation across all aspects
+        mse_list: list of MSE for each aspect (always a list)
+        corr_list: list of correlation for each aspect (always a list)
+    """
+    mse_list = []
+    corr_list = []
+    
+    # Handle both single and multi-aspect cases
+    num_aspects = audio_output.shape[1] if audio_output.dim() == 2 else 1
+    
+    # Calculate MSE and correlation for each aspect
+    for i in range(num_aspects):
+        if num_aspects == 1:
+            pred = audio_output.view(-1).numpy()
+            tgt = target.view(-1).numpy()
+        else:
+            pred = audio_output[:, i].numpy()
+            tgt = target[:, i].numpy()
+        
+        aspect_mse = np.mean((pred - tgt)**2)
+        corr_matrix = np.corrcoef(pred, tgt)
+        aspect_corr = corr_matrix[0, 1].item()
+        
+        mse_list.append(aspect_mse)
+        corr_list.append(aspect_corr)
+    
+    # Return average MSE and correlation across all aspects, plus individual lists
+    valid_token_mse = np.mean(mse_list)
+    corr = np.mean(corr_list)
+    
+    return valid_token_mse, corr, mse_list, corr_list
 
 def load_file(path):
     file = np.loadtxt(path, delimiter=',', dtype=str)
@@ -375,7 +495,10 @@ if __name__ == '__main__':
         'psd': 3,
         'ttl': 4,
     }
-    args.aspect_idx = aspect_map[args.aspect]
+    args.aspect_indices = [ aspect_map[aspect] for aspect in args.aspect.split(',') ]
+    if len(args.aspect_indices) == 1:
+        args.aspect_indices = args.aspect_indices[0]
+
     print(f'Training aspect: {args.aspect}')
 
     print('Prepare datasets...')
@@ -391,10 +514,10 @@ if __name__ == '__main__':
 
     if args.model == 'fluScorer':
         print('now train a fluScorer models')
-        audio_model = FluencyScorer(input_dim=input_dim, embed_dim=args.hidden_dim, clustering_dim=6)
+        audio_model = FluencyScorer(input_dim=input_dim, embed_dim=args.hidden_dim, clustering_dim=6, scorer_num=len(args.aspect.split(',')))
     elif args.model == 'fluScorerNoclu':
         print('now train a fluScorer models <<no cluster>>')
-        audio_model = FluencyScorerNoclu(input_dim=input_dim, embed_dim=args.hidden_dim)
+        audio_model = FluencyScorerNoclu(input_dim=input_dim, embed_dim=args.hidden_dim, scorer_num=len(args.aspect.split(',')))
     elif args.model == 'flu_TFR':
         print('Train model: Flu_TFR')
         audio_model = Flu_TFR(input_dim=input_dim,
