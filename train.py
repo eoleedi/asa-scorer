@@ -636,7 +636,7 @@ def main():
         shuffle=True,
         collate_fn=custom_collate_fn,
     )
-    # tr_dataloader = DataLoader(tr_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=custom_collate_fn)
+
     te_dataset = fluDataset("test", args.SO762_dir, args.load_cluster_index)
     te_dataloader = DataLoader(
         te_dataset,
@@ -671,6 +671,8 @@ def main():
             num_heads=args.num_heads,
             depth=args.depth,
         )
+    else:
+        raise ValueError(f"Unknown model type: {args.model}")
 
     train(audio_model, tr_dataloader, te_dataloader, args)
 
