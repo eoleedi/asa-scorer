@@ -13,13 +13,16 @@ num_heads=1
 SO762_dir=
 load_cluster_index=True
 
-tag=SSL_feat_fluTFR
+
 model=TransformerScorer
 model(){
   NonClusterScorer
   ClusterScorer
   TransformerScorer
 }
+
+aspect=flu
+tag=SSL_feat_${aspect}TFR
 
 exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}/br
 

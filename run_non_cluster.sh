@@ -23,7 +23,7 @@ model(){
 }
 
 aspect=flu
-tag=SSLfeat_${aspect}Score_noClu
+tag=SSLfeat_${aspect}Score_non_cluster
 # acc cpn flu psd ttl
 
 exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
