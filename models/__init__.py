@@ -1,2 +1,1 @@
-from .fluScorer import *
-from .fluTFR import *
+from .Scorer import *

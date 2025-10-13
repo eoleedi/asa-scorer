@@ -649,24 +649,24 @@ if __name__ == "__main__":
 
     input_dim = tr_dataset.feats[next(iter(tr_dataset.feats))].shape[1]
 
-    if args.model == "fluScorer":
-        print("now train a fluScorer models")
-        audio_model = FluencyScorer(
+    if args.model == "ClusterScorer":
+        print("now train a ClusterScorer models")
+        audio_model = ClusterScorer(
             input_dim=input_dim,
             embed_dim=args.hidden_dim,
             clustering_dim=6,
             scorer_num=len(args.aspect.split(",")),
         )
-    elif args.model == "fluScorerNoclu":
-        print("now train a fluScorer models <<no cluster>>")
-        audio_model = FluencyScorerNoclu(
+    elif args.model == "NonClusterScorer":
+        print("now train a NonClusterScorer models <<no cluster>>")
+        audio_model = NonClusterScorer(
             input_dim=input_dim,
             embed_dim=args.hidden_dim,
             scorer_num=len(args.aspect.split(",")),
         )
-    elif args.model == "flu_TFR":
-        print("Train model: Flu_TFR")
-        audio_model = Flu_TFR(
+    elif args.model == "TransformerScorer":
+        print("Train model: TransformerScorer")
+        audio_model = TransformerScorer(
             input_dim=input_dim,
             dropout_prob=args.dropout_prob,
             num_heads=args.num_heads,

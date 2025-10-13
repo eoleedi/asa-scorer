@@ -15,11 +15,11 @@ num_heads=1
 SO762_dir=
 load_cluster_index=True
 
-model=fluScorerNoclu
+model=NonClusterScorer
 model(){
-  fluScorerNoclu
-  fluScorer
-  flu_TFR
+  NonClusterScorer
+  ClusterScorer
+  TransformerScorer
 }
 
 aspect=flu

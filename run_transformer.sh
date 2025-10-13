@@ -14,11 +14,11 @@ SO762_dir=
 load_cluster_index=True
 
 tag=SSL_feat_fluTFR
-model=flu_TFR
+model=TransformerScorer
 model(){
-  fluScorerNoclu
-  fluScorer
-  flu_TFR
+  NonClusterScorer
+  ClusterScorer
+  TransformerScorer
 }
 
 exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}/br
