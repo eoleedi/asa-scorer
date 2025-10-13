@@ -1,9 +1,9 @@
 # Generate sequence phone input and label for seq2seq models from raw Kaldi GOP features.
 
-import numpy as np
 import json
 import os
 
+import numpy as np
 
 def load_file(path):
     file = np.loadtxt(path, delimiter=",", dtype=str)

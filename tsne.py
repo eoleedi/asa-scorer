@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 import os
 import time
+import pickle
+from pprint import pprint
+
+import joblib
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import manifold
-from tqdm import tqdm
-from pprint import pprint
-import pickle
-import joblib
 
 
 def load_feature(dataLoader, dataset_type):

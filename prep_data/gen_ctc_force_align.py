@@ -1,12 +1,13 @@
 import logging
 import os
 import sys
+import pickle
+
 import torch
 import torchaudio
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from tqdm import tqdm
-import pickle
 
 from force_align import get_trellis, backtrack
 

@@ -9,9 +9,9 @@
 
 import argparse
 import os
-import numpy as np
 import csv
 from collections import defaultdict
+import numpy as np
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument(

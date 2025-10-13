@@ -1,10 +1,10 @@
+import pickle
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import pickle
 import joblib
 from sklearn.metrics import (
-    silhouette_score,
     davies_bouldin_score,
     calinski_harabasz_score,
 )

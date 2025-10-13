@@ -3,19 +3,18 @@
 import sys
 import os
 import time
-from torch.utils.data import Dataset, DataLoader
-from torchaudio import load
+import random
+import argparse
+import pickle
+
 import matplotlib.pyplot as plt
 import numpy as np
-from tqdm import tqdm
-import pickle
 import joblib
-from torch.nn.utils.rnn import pad_sequence, pad_packed_sequence
-import random
 import torch
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
 
-from models import *
-import argparse
+from models import ClusterScorer, NonClusterScorer, TransformerScorer
 
 
 class bcolors:
@@ -595,7 +594,7 @@ class fluDataset(Dataset):
             return self.paths[idx], self.utt_label[idx, :], self.feats[self.paths[idx]]
 
 
-if __name__ == "__main__":
+def main():
     sys.path.append(os.path.dirname(os.path.dirname(sys.path[0])))
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -674,3 +673,7 @@ if __name__ == "__main__":
         )
 
     train(audio_model, tr_dataloader, te_dataloader, args)
+
+
+if __name__ == "__main__":
+    main()
