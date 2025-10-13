@@ -10,7 +10,7 @@ But, the repo will complete as soon as possible.
 
 ## Data
 The SpeechOcean762 dataset used in my work is an open dataset licenced with CC BY 4.0. 
-If You have downloaded speechocean762 for yourself, you can fill in your directory path to `prep_data/run.sh`.
+If You have downloaded speechocean762 for yourself, you can create a `.env` file and define the `SPEECHOCEAN_DIR` environment variable.
 
 ## Directions for The Programs
 ### The Input Features and Labels

@@ -10,7 +10,7 @@ gpu_index=0
 use_device='cuda'
 depth=3
 num_heads=1
-SO762_dir=
+SO762_dir=${SPEECHOCEAN762_DIR}
 load_cluster_index=True
 
 
