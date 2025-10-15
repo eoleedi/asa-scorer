@@ -1,6 +1,6 @@
 #!/bin/bash
 set -x
-
+source .env
 lr=1e-3
 batch_size=25
 hidden_dim=32

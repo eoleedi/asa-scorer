@@ -1,5 +1,6 @@
 #!/bin/bash
 set -x
+source .env
 stage=1
 stop_stage=1000
 
