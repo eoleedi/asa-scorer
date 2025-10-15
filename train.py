@@ -53,7 +53,7 @@ def set_arg(parser):
         "--hidden_dim", type=int, default=256, help="training hidden dimension"
     )
     parser.add_argument(
-        "--model", type=str, default="fluScorer", help="name of the model"
+        "--model", type=str, default="ClusterScorer", help="name of the model"
     )
     parser.add_argument("--use_device", type=str, default="cpu", help="device to use")
     parser.add_argument("--gpu_index", type=int, default=0, help="GPU index")
@@ -222,7 +222,7 @@ def train(audio_model, train_loader, test_loader, args):
 
     audio_model = audio_model.to(device)
 
-    if args.model == "fluScorer" or args.model == "flu_TFR":
+    if args.model == "ClusterScorer" or args.model == "TransformerScorer":
         kmeans_model = joblib.load(f"exp/kmeans/kmeans_model.joblib")
     else:
         kmeans_model = None
@@ -299,9 +299,9 @@ def train(audio_model, train_loader, test_loader, args):
             """
 
             feats = feats.to(device)
-            if args.model == "fluScorer" or args.model == "flu_TFR":
+            if args.model == "ClusterScorer" or args.model == "TransformerScorer":
                 pred = audio_model(feats, cluster_index)
-            elif args.model == "fluScorerNoclu":
+            elif args.model == "NonClusterScorer":
                 pred = audio_model(feats)
 
             if isinstance(args.aspect_indices, list):
@@ -449,9 +449,9 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
             """
 
             feats = feats.to(device)
-            if args.model == "fluScorer" or args.model == "flu_TFR":
+            if args.model == "ClusterScorer" or args.model == "TransformerScorer":
                 score = audio_model(feats, cluster_index)
-            elif args.model == "fluScorerNoclu":
+            elif args.model == "NonClusterScorer":
                 score = audio_model(feats)
 
             score = score.to("cpu").detach()
