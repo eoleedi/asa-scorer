@@ -17,6 +17,22 @@ from torch.nn.utils.rnn import pad_sequence
 
 from models import ClusterScorer, NonClusterScorer, TransformerScorer
 
+aspect_name_map = {
+    "acc": "accuracy",
+    "cpn": "completeness",
+    "flu": "fluency",
+    "psd": "prosody",
+    "ttl": "total",
+}
+
+aspect2abbr = {
+    "accuracy": "acc",
+    "completeness": "cpn",
+    "fluency": "flu",
+    "prosody": "psd",
+    "total": "ttl",
+}
+
 
 class bcolors:
     HEADER = "\033[95m"
@@ -76,7 +92,7 @@ def set_arg(parser):
         "--load_cluster_index", type=bool, default=False, help="load cluster index"
     )
     parser.add_argument("--seed", type=int, default=66)
-    parser.add_argument("--aspect", type=str, default="flu")
+    parser.add_argument("--aspect", nargs="+", default=["fluency"])
     return parser
 
 
@@ -161,18 +177,11 @@ def gen_result_header(aspect_names):
     Generate CSV header based on the aspects being trained.
 
     Args:
-        aspect_names: list of aspect names (e.g., ['flu', 'psd'])
+        aspect_names: list of aspect names (e.g., ['fluency', 'prosody'])
     """
-    aspect_name_map = {
-        "acc": "accuracy",
-        "cpn": "completeness",
-        "flu": "fluency",
-        "psd": "prosody",
-        "ttl": "total",
-    }
 
     utt_header_set = ["utt_train_mse", "utt_train_pcc", "utt_test_mse", "utt_test_pcc"]
-    utt_header_scores = [aspect_name_map.get(aspect, aspect) for aspect in aspect_names]
+    utt_header_scores = aspect_names
 
     # Generate headers for each aspect
     utt_header = []
@@ -201,15 +210,8 @@ def train(audio_model, train_loader, test_loader, args):
     print("running on " + str(device))
 
     # Get aspect information early for use throughout training
-    aspect_names = args.aspect.split(",")
+    aspect_names = args.aspect
     num_aspects = len(aspect_names)
-    aspect_name_map = {
-        "acc": "Accuracy",
-        "cpn": "Completeness",
-        "flu": "Fluency",
-        "psd": "Prosody",
-        "ttl": "Total",
-    }
 
     train_mse_values, train_corr_values = [], []
     val_mse_values, val_corr_values = [], []
@@ -617,13 +619,13 @@ def main():
     torch.cuda.manual_seed_all(seed)
 
     aspect_map = {
-        "acc": 0,
-        "cpn": 1,
-        "flu": 2,
-        "psd": 3,
-        "ttl": 4,
+        "accuracy": 0,
+        "completeness": 1,
+        "fluency": 2,
+        "prosody": 3,
+        "total": 4,
     }
-    args.aspect_indices = [aspect_map[aspect] for aspect in args.aspect.split(",")]
+    args.aspect_indices = [aspect_map[aspect] for aspect in args.aspect]
     if len(args.aspect_indices) == 1:
         args.aspect_indices = args.aspect_indices[0]
 
@@ -655,14 +657,14 @@ def main():
             input_dim=input_dim,
             embed_dim=args.hidden_dim,
             clustering_dim=6,
-            scorer_num=len(args.aspect.split(",")),
+            scorers=args.aspect,
         )
     elif args.model == "NonClusterScorer":
         print("now train a NonClusterScorer models <<no cluster>>")
         audio_model = NonClusterScorer(
             input_dim=input_dim,
             embed_dim=args.hidden_dim,
-            scorer_num=len(args.aspect.split(",")),
+            scorers=args.aspect,
         )
     elif args.model == "TransformerScorer":
         print("Train model: TransformerScorer")

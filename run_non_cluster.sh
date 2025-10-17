@@ -23,8 +23,8 @@ model(){
   TransformerScorer
 }
 
-aspect=flu
-tag_aspect=${aspect//,/+}
+aspect="fluency prosody"
+tag_aspect=${aspect// /+}
 tag=SSLfeat_${tag_aspect}Score_non_cluster
 # acc cpn flu psd ttl
 

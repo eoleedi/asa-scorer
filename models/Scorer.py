@@ -77,18 +77,19 @@ class BiLSTMScorer(nn.Module):
 
 class NonClusterScorer(nn.Module):
     """
-    A model for fluency score prediction without using cluster.
+    A model for score prediction on multiple aspects.
+    @param scorers: a list of aspects to be evaluated (e.g., ['fluency', 'pronunciation'])
     """
 
-    def __init__(self, input_dim: int, embed_dim: int, scorer_num: int = 1):
+    def __init__(self, input_dim: int, embed_dim: int, scorers: list):
         super().__init__()
         self.preprocessing = nn.Sequential(
             nn.Linear(input_dim, embed_dim),
             nn.LayerNorm(embed_dim),
             nn.Tanh(),
         )
-        self.scorers = nn.ModuleList(
-            [BiLSTMScorer(embed_dim, embed_dim, 2) for _ in range(scorer_num)]
+        self.scorers = nn.ModuleDict(
+            {aspect: BiLSTMScorer(embed_dim, embed_dim, 2) for aspect in scorers}
         )
 
     def forward(self, x) -> torch.Tensor | list:
@@ -110,7 +111,7 @@ class NonClusterScorer(nn.Module):
         # step 2: make a score directly
         pred = [
             scorer(x=new_audio_embedding_tensor, seq_lengths=seq_lengths)
-            for scorer in self.scorers
+            for scorer in self.scorers.values()
         ]
         pred = torch.cat(pred, dim=1) if len(pred) > 1 else pred[0]
 
@@ -122,7 +123,7 @@ class ClusterScorer(nn.Module):
     The main model for fluency score prediction with using cluster.
     """
 
-    def __init__(self, input_dim, embed_dim, clustering_dim=6, scorer_num=1):
+    def __init__(self, input_dim, embed_dim, scorers: list, clustering_dim=6):
         super().__init__()
         self.preprocessing = nn.Sequential(
             nn.Linear(input_dim, embed_dim),
@@ -130,11 +131,11 @@ class ClusterScorer(nn.Module):
             nn.Tanh(),
         )
         self.cluster_embed = nn.Embedding(50 + 1, clustering_dim, padding_idx=0)
-        self.scorers = nn.ModuleList(
-            [
-                BiLSTMScorer(embed_dim + clustering_dim, embed_dim, 2)
-                for _ in range(scorer_num)
-            ]
+        self.scorers = nn.ModuleDict(
+            {
+                aspect: BiLSTMScorer(embed_dim + clustering_dim, embed_dim, 2)
+                for aspect in scorers
+            }
         )
 
     def forward(self, x, cluster_id):
@@ -160,7 +161,8 @@ class ClusterScorer(nn.Module):
 
         # step 3: make a score
         pred = [
-            scorer(x=audio_features, seq_lengths=seq_lengths) for scorer in self.scorers
+            scorer(x=audio_features, seq_lengths=seq_lengths)
+            for scorer in self.scorers.values()
         ]
         # Stack all predictions into a single tensor
         pred = torch.cat(pred, dim=1) if len(pred) > 1 else pred[0]
@@ -178,6 +180,7 @@ class TransformerScorer(nn.Module):
         norm_first=True,
         clustering_dim=6,
     ):
+        # TODO: Support multiple aspects
         super().__init__()
         self.input_dim = input_dim
         self.dropout_prob = dropout_prob

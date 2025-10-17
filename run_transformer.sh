@@ -21,8 +21,8 @@ model(){
   TransformerScorer
 }
 
-aspect=flu
-tag_aspect=${aspect//,/+}
+aspect="fluency prosody"
+tag_aspect=${aspect// /+}
 tag=SSL_feat_${tag_aspect}TFR
 
 exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}/br
