@@ -89,15 +89,6 @@ def main():
     # Load the test data
     data = load_dataset(args.dataset, split="train")
 
-    if "prosody" in args.aspect and "prosodic" in data.column_names:
-        # rename prosodic column to prosody for consistency
-        # TODO: remove this hack when possible, make all column names and scorer prosodic
-        def rename_prosody(example):
-            example["prosody"] = example.pop("prosodic")
-            return example
-
-        data = data.map(rename_prosody)
-
     # Load the fluency model
     if args.model == "NonClusterScorer":
         audio_model = NonClusterScorer(

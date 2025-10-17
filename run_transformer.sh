@@ -21,7 +21,7 @@ model(){
   TransformerScorer
 }
 
-aspect="fluency prosody"
+aspect="fluency prosodic"
 tag_aspect=${aspect// /+}
 tag=SSL_feat_${tag_aspect}TFR
 

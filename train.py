@@ -21,7 +21,7 @@ aspect_name_map = {
     "acc": "accuracy",
     "cpn": "completeness",
     "flu": "fluency",
-    "psd": "prosody",
+    "psd": "prosodic",
     "ttl": "total",
 }
 
@@ -29,7 +29,7 @@ aspect2abbr = {
     "accuracy": "acc",
     "completeness": "cpn",
     "fluency": "flu",
-    "prosody": "psd",
+    "prosodic": "psd",
     "total": "ttl",
 }
 
@@ -177,7 +177,7 @@ def gen_result_header(aspect_names):
     Generate CSV header based on the aspects being trained.
 
     Args:
-        aspect_names: list of aspect names (e.g., ['fluency', 'prosody'])
+        aspect_names: list of aspect names (e.g., ['fluency', 'prosodic'])
     """
 
     utt_header_set = ["utt_train_mse", "utt_train_pcc", "utt_test_mse", "utt_test_pcc"]
@@ -597,11 +597,12 @@ def main():
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+    # TODO: this indices mapping are highly coupled with the dataset creation process in process_feat_seq_utt.py, need to refactor
     aspect_map = {
         "accuracy": 0,
         "completeness": 1,
         "fluency": 2,
-        "prosody": 3,
+        "prosodic": 3,
         "total": 4,
     }
     args.aspect_indices = [aspect_map[aspect] for aspect in args.aspect]
