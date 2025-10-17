@@ -96,10 +96,10 @@ def set_arg(parser):
     return parser
 
 
-def convert_bin(input, num_binary=6):
+def convert_bin(x, num_binary=6):
     # Convert each number to its binary representation
     binary_representations = [
-        list(map(int, bin(num)[2:].zfill(num_binary))) for num in input
+        list(map(int, bin(num)[2:].zfill(num_binary))) for num in x
     ]
 
     # Convert to a PyTorch tensor
@@ -270,6 +270,8 @@ def train(audio_model, train_loader, test_loader, args):
                 audio_paths, utt_label, feats = data
             elif len(data) == 4:
                 audio_paths, utt_label, feats, indexs = data
+                cluster_index = indexs + 1
+                cluster_index = cluster_index.to(device)
             else:
                 raise ValueError("Unexpected number of elements in data")
 
@@ -287,24 +289,14 @@ def train(audio_model, train_loader, test_loader, args):
 
             cluster_index = indexs + 1
             cluster_index = cluster_index.to(device)
-            """
-            if (args.model == 'fluScorer' or args.model == 'flu_TFR') and args.load_cluster_index:
-                cluster_index = cluster_pred(feats, kmeans_model)
-                cluster_index = cluster_index.to(device)
-            else:
-                cluster_index_list = []
-                for index in indexs:
-                    cluster_index = convert_bin(index, 6)
-                    cluster_index_list.append(cluster_index)
-                cluster_index_tensor = torch.stack(cluster_index_list, dim=0)
-                cluster_index = cluster_index_tensor.to(device)
-            """
 
             feats = feats.to(device)
             if args.model == "ClusterScorer" or args.model == "TransformerScorer":
                 pred = audio_model(feats, cluster_index)
             elif args.model == "NonClusterScorer":
                 pred = audio_model(feats)
+            else:
+                raise ValueError(f"Model {args.model} not recognized.")
 
             if isinstance(args.aspect_indices, list):
                 labels = utt_label[:, args.aspect_indices]
@@ -432,23 +424,10 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
                 audio_paths, utt_label, feats = data
             elif len(data) == 4:
                 audio_paths, utt_label, feats, indexs = data
-            else:
-                raise ValueError("Unexpected number of elements in data")
-
-            cluster_index = indexs + 1
-            cluster_index = cluster_index.to(device)
-            """
-            if (args.model == 'fluScorer' or args.model == 'flu_TFR') and args.load_cluster_index:
-                cluster_index = cluster_pred(feats, kmeans_model)
+                cluster_index = indexs + 1
                 cluster_index = cluster_index.to(device)
             else:
-                cluster_index_list = []
-                for index in indexs:
-                    cluster_index = convert_bin(index, 6)
-                    cluster_index_list.append(cluster_index)
-                cluster_index_tensor = torch.stack(cluster_index_list, dim=0)
-                cluster_index = cluster_index_tensor.to(device)
-            """
+                raise ValueError("Unexpected number of elements in data")
 
             feats = feats.to(device)
             if args.model == "ClusterScorer" or args.model == "TransformerScorer":
@@ -564,7 +543,7 @@ class fluDataset(Dataset):
         elif set == "test":
             dataset_type = "te"
         else:
-            print(f"Error: not such set called {set}")
+            raise ValueError(f"Error: not such set called {set}")
 
         self.utt_label = torch.tensor(
             np.load(f"data/{dataset_type}_label_utt.npy"), dtype=torch.float
