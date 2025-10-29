@@ -1,5 +1,6 @@
 #!/bin/bash
 set -x
+source .env
 stage=1
 stop_stage=1000
 
@@ -12,18 +13,19 @@ gpu_index=0
 use_device='cuda'
 depth=3
 num_heads=1
-SO762_dir=
+SO762_dir=${SPEECHOCEAN762_DIR}
 load_cluster_index=True
 
-model=fluScorerNoclu
+model=NonClusterScorer
 model(){
-  fluScorerNoclu
-  fluScorer
-  flu_TFR
+  NonClusterScorer
+  ClusterScorer
+  TransformerScorer
 }
 
-aspect=flu
-tag=SSLfeat_${aspect}Score_noClu
+aspect="fluency prosodic"
+tag_aspect=${aspect// /+}
+tag=SSLfeat_${tag_aspect}Score_non_cluster
 # acc cpn flu psd ttl
 
 exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br

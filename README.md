@@ -8,13 +8,9 @@ These implementations are unofficial, and there might be some bugs that I missed
 
 But, the repo will complete as soon as possible.
 
-## Overview of Model Structure
-Here shows the main structure for this repo: 
-![image](https://github.com/tangYang7/fluency_scorer/assets/114934655/e2f4d1d6-139a-40a4-a397-947a19469da4)
-
 ## Data
 The SpeechOcean762 dataset used in my work is an open dataset licenced with CC BY 4.0. 
-If You have downloaded speechocean762 for yourself, you can fill in your directory path to `prep_data/run.sh`.
+If You have downloaded speechocean762 for yourself, you can create a `.env` file and define the `SPEECHOCEAN_DIR` environment variable.
 
 ## Directions for The Programs
 ### The Input Features and Labels
@@ -25,7 +21,7 @@ cd prep_data
 ./run.sh
 ```
 - The labels are fluency scores in speechocean762.
-- The acoustic features are extracted by **Wav2vec_large**, where the dim is the value of 1024.
+- The acoustic features are extracted by **HuBert_Large**, where the dim is the value of 1024.
 - The feats and labels files are collected in `data`.
 - The cluster model is trained in `train_kmeans.py`, the model will be saved in `exp/kmeans`, which is used in fluency_scoring training later. 
 - `kmeans_metric.py` is used to take a look the performance of kmeans clustering.

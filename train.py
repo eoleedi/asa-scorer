@@ -3,57 +3,109 @@
 import sys
 import os
 import time
-from torch.utils.data import Dataset, DataLoader
-from torchaudio import load
+import random
+import argparse
+import pickle
+
 import matplotlib.pyplot as plt
 import numpy as np
-from tqdm import tqdm
-import pickle
 import joblib
-from torch.nn.utils.rnn import pad_sequence, pad_packed_sequence
-import random
 import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
 
-from models import *
-import argparse
+from models import ClusterScorer, NonClusterScorer, TransformerScorer
+
+aspect_name_map = {
+    "acc": "accuracy",
+    "cpn": "completeness",
+    "flu": "fluency",
+    "psd": "prosodic",
+    "ttl": "total",
+}
+
+aspect2abbr = {
+    "accuracy": "acc",
+    "completeness": "cpn",
+    "fluency": "flu",
+    "prosodic": "psd",
+    "total": "ttl",
+}
+
 
 class bcolors:
-    HEADER = '\033[95m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    GREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+    HEADER = "\033[95m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+
 
 def set_arg(parser):
-    parser.add_argument("--exp-dir", type=str, default="./exp/", help="directory to dump experiments")
-    parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, metavar='LR', help='initial learning rate')
-    parser.add_argument("--n-epochs", type=int, default=100, help="number of maximum training epochs")
-    parser.add_argument("--batch_size", type=int, default=32, help="training batch size")
-    parser.add_argument("--hidden_dim", type=int, default=256, help="training hidden dimension")
-    parser.add_argument("--model", type=str, default='fluScorer', help="name of the model")
-    parser.add_argument("--use_device", type=str, default='cpu', help="device to use")
+    parser.add_argument(
+        "--exp-dir", type=str, default="./exp/", help="directory to dump experiments"
+    )
+    parser.add_argument(
+        "--lr",
+        "--learning-rate",
+        default=1e-3,
+        type=float,
+        metavar="LR",
+        help="initial learning rate",
+    )
+    parser.add_argument(
+        "--n-epochs", type=int, default=100, help="number of maximum training epochs"
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=32, help="training batch size"
+    )
+    parser.add_argument(
+        "--hidden_dim", type=int, default=256, help="training hidden dimension"
+    )
+    parser.add_argument(
+        "--model", type=str, default="ClusterScorer", help="name of the model"
+    )
+    parser.add_argument("--use_device", type=str, default="cpu", help="device to use")
     parser.add_argument("--gpu_index", type=int, default=0, help="GPU index")
-    parser.add_argument("--num_heads", type=int, default=4, help="number of heads in transformer")
-    parser.add_argument("--depth", type=int, default=3, help="number of layers in transformer")
-    parser.add_argument("--dropout_prob", type=float, default=0.1, help="dropout probability")
-    parser.add_argument("--SO762_dir", type=str, default='speechocean762', help="directory of speechocean762")
-    parser.add_argument("--load_cluster_index", type=bool, default=False, help="load cluster index")
+    parser.add_argument(
+        "--num_heads", type=int, default=4, help="number of heads in transformer"
+    )
+    parser.add_argument(
+        "--depth", type=int, default=3, help="number of layers in transformer"
+    )
+    parser.add_argument(
+        "--dropout_prob", type=float, default=0.1, help="dropout probability"
+    )
+    parser.add_argument(
+        "--SO762_dir",
+        type=str,
+        default="speechocean762",
+        help="directory of speechocean762",
+    )
+    parser.add_argument(
+        "--load_cluster_index", type=bool, default=False, help="load cluster index"
+    )
     parser.add_argument("--seed", type=int, default=66)
-    parser.add_argument("--aspect", type=str, default='flu')
+    parser.add_argument("--aspect", nargs="+", default=["fluency"])
     return parser
 
-def convert_bin(input, num_binary=6):
+
+def convert_bin(x, num_binary=6):
     # Convert each number to its binary representation
-    binary_representations = [list(map(int, bin(num)[2:].zfill(num_binary))) for num in input]
-    
+    binary_representations = [
+        list(map(int, bin(num)[2:].zfill(num_binary))) for num in x
+    ]
+
     # Convert to a PyTorch tensor
     tensor_2d = torch.tensor(binary_representations)
     return tensor_2d
+
 
 def cluster_pred(feats, model):
     feats = feats.cpu().numpy()
@@ -65,47 +117,101 @@ def cluster_pred(feats, model):
     cluster_index_tensor = torch.stack(cluster_index_list, dim=0)
     return cluster_index_tensor
 
-def draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr_values, epochs_list, exp_dir):
+
+def draw_train_fig(
+    train_mse_values,
+    val_mse_values,
+    train_corr_values,
+    val_corr_values,
+    epochs_list,
+    exp_dir,
+    aspect_names,
+):
+    """
+    Draw training and validation curves.
+
+    Args:
+        train_mse_values: list of average training MSE per epoch
+        val_mse_values: list of average validation MSE per epoch
+        train_corr_values: list of average training correlation per epoch
+        val_corr_values: list of average validation correlation per epoch
+        epochs_list: list of epoch numbers
+        exp_dir: experiment directory to save the figure
+        aspect_names: list of aspect names (e.g., ['flu', 'psd'])
+    """
+    aspect_title = (
+        " + ".join([a.upper() for a in aspect_names])
+        if len(aspect_names) > 1
+        else aspect_names[0].upper()
+    )
+
     plt.figure(figsize=(10, 5))
 
     plt.subplot(1, 2, 1)
-    plt.plot(epochs_list, train_mse_values, label='Training MSE')
-    plt.plot(epochs_list, val_mse_values, label='Validation MSE')
-    plt.title('Training and Validation MSE')
-    plt.xlabel('Epoch')
-    plt.ylabel('MSE')
+    plt.plot(epochs_list, train_mse_values, label="Training MSE")
+    plt.plot(epochs_list, val_mse_values, label="Validation MSE")
+    plt.title(f"Training and Validation MSE ({aspect_title})")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE")
     plt.legend()
 
     plt.subplot(1, 2, 2)
-    plt.plot(epochs_list, train_corr_values, label='Training Correlation')
-    plt.plot(epochs_list, val_corr_values, label='Validation Correlation')
-    plt.title('Training and Validation Correlation')
-    plt.xlabel('Epoch')
-    plt.ylabel('Correlation')
+    plt.plot(epochs_list, train_corr_values, label="Training Correlation")
+    plt.plot(epochs_list, val_corr_values, label="Validation Correlation")
+    plt.title(f"Training and Validation Correlation ({aspect_title})")
+    plt.xlabel("Epoch")
+    plt.ylabel("Correlation")
     plt.legend()
 
     # Annotate the PCC in the end
     ylast, xlast = val_corr_values[-1], epochs_list[-1]
-    plt.text(xlast, ylast, f'{ylast:.3f}', ha='right', color='red', fontsize=10)
+    plt.text(xlast, ylast, f"{ylast:.3f}", ha="right", color="red", fontsize=10)
 
     plt.tight_layout()
     plt.savefig(f"{exp_dir}/train.jpg")
+    plt.close()
 
-def gen_result_header():
-    utt_header_set = ['utt_train_mse', 'utt_train_pcc', 'utt_test_mse', 'utt_test_pcc']
-    utt_header_score = ['fluency']
+
+def gen_result_header(aspect_names):
+    """
+    Generate CSV header based on the aspects being trained.
+
+    Args:
+        aspect_names: list of aspect names (e.g., ['fluency', 'prosodic'])
+    """
+
+    utt_header_set = ["utt_train_mse", "utt_train_pcc", "utt_test_mse", "utt_test_pcc"]
+    utt_header_scores = aspect_names
+
+    # Generate headers for each aspect
     utt_header = []
     for dset in utt_header_set:
-        utt_header = utt_header + [dset+'_'+x for x in utt_header_score]
+        utt_header = utt_header + [dset + "_" + x for x in utt_header_scores]
 
-    header = ['epoch', 'learning_rate'] + utt_header
+    # Add average headers if multiple aspects
+    if len(aspect_names) > 1:
+        avg_header = [
+            "utt_train_mse_avg",
+            "utt_train_pcc_avg",
+            "utt_test_mse_avg",
+            "utt_test_pcc_avg",
+        ]
+        header = ["epoch", "learning_rate"] + avg_header + utt_header
+    else:
+        header = ["epoch", "learning_rate"] + utt_header
+
     return header
+
 
 def train(audio_model, train_loader, test_loader, args):
     gpu_index = 0
     torch.cuda.set_device(gpu_index)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print('running on ' + str(device))
+    print("running on " + str(device))
+
+    # Get aspect information early for use throughout training
+    aspect_names = args.aspect
+    num_aspects = len(aspect_names)
 
     train_mse_values, train_corr_values = [], []
     val_mse_values, val_corr_values = [], []
@@ -118,25 +224,45 @@ def train(audio_model, train_loader, test_loader, args):
 
     audio_model = audio_model.to(device)
 
-    if args.model == 'fluScorer' or args.model == 'flu_TFR':
-        kmeans_model = joblib.load(f'exp/kmeans/kmeans_model.joblib')
+    if args.model == "ClusterScorer" or args.model == "TransformerScorer":
+        kmeans_model = joblib.load(f"exp/kmeans/kmeans_model.joblib")
     else:
         kmeans_model = None
 
     # Set up the optimizer
     trainables = [p for p in audio_model.parameters() if p.requires_grad]
-    print('Total parameter number is : {:.3f} k'.format(sum(p.numel() for p in audio_model.parameters()) / 1e3))
-    print('Total trainable parameter number is : {:.3f} k'.format(sum(p.numel() for p in trainables) / 1e3))
-    optimizer = torch.optim.Adam(trainables, args.lr, weight_decay=5e-7, betas=(0.95, 0.999))
+    print(
+        "Total parameter number is : {:.3f} k".format(
+            sum(p.numel() for p in audio_model.parameters()) / 1e3
+        )
+    )
+    print(
+        "Total trainable parameter number is : {:.3f} k".format(
+            sum(p.numel() for p in trainables) / 1e3
+        )
+    )
+    optimizer = torch.optim.Adam(
+        trainables, args.lr, weight_decay=5e-7, betas=(0.95, 0.999)
+    )
 
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, list(range(20, 100, 5)), gamma=0.5, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, list(range(20, 100, 5)), gamma=0.5, last_epoch=-1
+    )
 
     loss_fn = nn.MSELoss()
 
     print("current #steps=%s, #epochs=%s" % (global_step, epoch))
     print("start training...")
-    result = np.zeros([args.n_epochs, 7])
-    
+
+    # Calculate result array size based on number of aspects
+    if num_aspects > 1:
+        # epoch, lr, avg(train_mse, train_corr, test_mse, test_corr), per-aspect(train_mse, train_corr, test_mse, test_corr)
+        result_cols = 2 + 4 + (4 * num_aspects)
+    else:
+        # epoch, lr, train_mse, train_corr, test_mse, test_corr
+        result_cols = 2 + (4 * num_aspects)
+    result = np.zeros([args.n_epochs, result_cols])
+
     while epoch < args.n_epochs:
         audio_model.train()
         for _, data in enumerate(train_loader):
@@ -144,6 +270,8 @@ def train(audio_model, train_loader, test_loader, args):
                 audio_paths, utt_label, feats = data
             elif len(data) == 4:
                 audio_paths, utt_label, feats, indexs = data
+                cluster_index = indexs + 1
+                cluster_index = cluster_index.to(device)
             else:
                 raise ValueError("Unexpected number of elements in data")
 
@@ -152,45 +280,46 @@ def train(audio_model, train_loader, test_loader, args):
             if global_step <= warm_up_step and global_step % 5 == 0:
                 warm_lr = (global_step / warm_up_step) * args.lr
                 for param_group in optimizer.param_groups:
-                    param_group['lr'] = warm_lr
-                print('warm-up learning rate is {:f}'.format(optimizer.param_groups[0]['lr']))
+                    param_group["lr"] = warm_lr
+                print(
+                    "warm-up learning rate is {:f}".format(
+                        optimizer.param_groups[0]["lr"]
+                    )
+                )
 
             cluster_index = indexs + 1
             cluster_index = cluster_index.to(device)
-            """
-            if (args.model == 'fluScorer' or args.model == 'flu_TFR') and args.load_cluster_index:
-                cluster_index = cluster_pred(feats, kmeans_model)
-                cluster_index = cluster_index.to(device)
-            else:
-                cluster_index_list = []
-                for index in indexs:
-                    cluster_index = convert_bin(index, 6)
-                    cluster_index_list.append(cluster_index)
-                cluster_index_tensor = torch.stack(cluster_index_list, dim=0)
-                cluster_index = cluster_index_tensor.to(device)
-            """  
 
             feats = feats.to(device)
-            if args.model == 'fluScorer' or args.model == 'flu_TFR':
+            if args.model == "ClusterScorer" or args.model == "TransformerScorer":
                 pred = audio_model(feats, cluster_index)
-            elif args.model == 'fluScorerNoclu':
+            elif args.model == "NonClusterScorer":
                 pred = audio_model(feats)
+            else:
+                raise ValueError(f"Model {args.model} not recognized.")
 
-            flu_label = torch.unsqueeze(utt_label[:, args.aspect_idx], 1)
-            flu_label = flu_label.to(device, non_blocking=True)
-            loss = loss_fn(pred, flu_label)
+            if isinstance(args.aspect_indices, list):
+                labels = utt_label[:, args.aspect_indices]
+            else:
+                labels = torch.unsqueeze(utt_label[:, args.aspect_indices], 1)
+            labels = labels.to(device, non_blocking=True)
+            loss = loss_fn(pred, labels)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             global_step += 1
 
-        print('start validation')
+        print("start validation")
 
         # ensemble results
         # don't save prediction for the training set
-        tr_mse, tr_corr = validate(audio_model, train_loader, args, -1, kmeans_model)
-        te_mse, te_corr = validate(audio_model, test_loader, args, best_mse, kmeans_model)
+        tr_mse, tr_corr, tr_mse_list, tr_corr_list = validate(
+            audio_model, train_loader, args, -1, kmeans_model
+        )
+        te_mse, te_corr, te_mse_list, te_corr_list = validate(
+            audio_model, test_loader, args, best_mse, kmeans_model
+        )
 
         train_mse_values.append(tr_mse)
         train_corr_values.append(tr_corr)
@@ -198,11 +327,56 @@ def train(audio_model, train_loader, test_loader, args):
         val_corr_values.append(te_corr)
         epochs_list.append(epoch)
 
-        print('Fluency: Train MSE: {:.3f}, CORR: {:.3f}'.format(tr_mse.item(), tr_corr))
-        print(f'Fluency: Test MSE: {te_mse.item():.3f}, {bcolors.YELLOW}CORR: {te_corr:.3f}{bcolors.ENDC}')
+        # Handle both tensor and scalar returns from validate
+        tr_mse_val = tr_mse.item() if isinstance(tr_mse, torch.Tensor) else tr_mse
+        te_mse_val = te_mse.item() if isinstance(te_mse, torch.Tensor) else te_mse
 
-        result[epoch, :6] = [epoch, optimizer.param_groups[0]['lr'], tr_mse, tr_corr, te_mse, te_corr]
-        print('-------------------validation finished-------------------')
+        # Print overall metrics
+        print("Overall: Train MSE: {:.3f}, CORR: {:.3f}".format(tr_mse_val, tr_corr))
+        print(
+            f"Overall: Test MSE: {te_mse_val:.3f}, {bcolors.YELLOW}CORR: {te_corr:.3f}{bcolors.ENDC}"
+        )
+
+        # Print per-aspect metrics (always available as lists)
+        if len(aspect_names) > 1:
+            print("\nPer-aspect metrics:")
+        for i, aspect in enumerate(aspect_names):
+            full_name = aspect_name_map.get(aspect, aspect.upper())
+            if len(aspect_names) > 1:
+                print(
+                    f"  {full_name}: Train MSE: {tr_mse_list[i]:.3f}, CORR: {tr_corr_list[i]:.3f} | "
+                    f"Test MSE: {te_mse_list[i]:.3f}, {bcolors.CYAN}CORR: {te_corr_list[i]:.3f}{bcolors.ENDC}"
+                )
+
+        # Save results to array
+        if len(aspect_names) > 1:
+            # Save: epoch, lr, avg metrics, then per-aspect metrics
+            result_row = [
+                epoch,
+                optimizer.param_groups[0]["lr"],
+                tr_mse_val,
+                tr_corr,
+                te_mse_val,
+                te_corr,
+            ]
+            # Add per-aspect metrics in order: train_mse, train_corr, test_mse, test_corr for each aspect
+            for i in range(num_aspects):
+                result_row.extend(
+                    [tr_mse_list[i], tr_corr_list[i], te_mse_list[i], te_corr_list[i]]
+                )
+            result[epoch, :] = result_row
+        else:
+            # Single aspect: epoch, lr, train_mse, train_corr, test_mse, test_corr
+            result[epoch, :] = [
+                epoch,
+                optimizer.param_groups[0]["lr"],
+                tr_mse_list[0],
+                tr_corr_list[0],
+                te_mse_list[0],
+                te_corr_list[0],
+            ]
+
+        print("-------------------validation finished-------------------")
 
         if te_mse < best_mse:
             best_mse = te_mse
@@ -211,17 +385,30 @@ def train(audio_model, train_loader, test_loader, args):
         if best_epoch == epoch:
             if os.path.exists("%s/models/" % (exp_dir)) == False:
                 os.mkdir("%s/models" % (exp_dir))
-            torch.save(audio_model.state_dict(), "%s/models/best_audio_model.pth" % (exp_dir))
+            torch.save(
+                audio_model.state_dict(), "%s/models/best_audio_model.pth" % (exp_dir)
+            )
 
         if global_step > warm_up_step:
             scheduler.step()
 
-        print('Epoch-{0} lr: {1}'.format(epoch, optimizer.param_groups[0]['lr']))
+        print("Epoch-{0} lr: {1}".format(epoch, optimizer.param_groups[0]["lr"]))
         epoch += 1
 
-    draw_train_fig(train_mse_values, val_mse_values, train_corr_values, val_corr_values, epochs_list, exp_dir)
-    header = ','.join(gen_result_header())
-    np.savetxt(exp_dir + '/result.csv', result, delimiter=',', header=header, comments='')
+    draw_train_fig(
+        train_mse_values,
+        val_mse_values,
+        train_corr_values,
+        val_corr_values,
+        epochs_list,
+        exp_dir,
+        aspect_names,
+    )
+    header = ",".join(gen_result_header(aspect_names))
+    np.savetxt(
+        exp_dir + "/result.csv", result, delimiter=",", header=header, comments=""
+    )
+
 
 def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
     gpu_index = 0
@@ -237,106 +424,137 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
                 audio_paths, utt_label, feats = data
             elif len(data) == 4:
                 audio_paths, utt_label, feats, indexs = data
-            else:
-                raise ValueError("Unexpected number of elements in data")
-            
-            cluster_index = indexs + 1
-            cluster_index = cluster_index.to(device)
-            '''
-            if (args.model == 'fluScorer' or args.model == 'flu_TFR') and args.load_cluster_index:
-                cluster_index = cluster_pred(feats, kmeans_model)
+                cluster_index = indexs + 1
                 cluster_index = cluster_index.to(device)
             else:
-                cluster_index_list = []
-                for index in indexs:
-                    cluster_index = convert_bin(index, 6)
-                    cluster_index_list.append(cluster_index)
-                cluster_index_tensor = torch.stack(cluster_index_list, dim=0)
-                cluster_index = cluster_index_tensor.to(device)
-            '''
+                raise ValueError("Unexpected number of elements in data")
 
             feats = feats.to(device)
-            if args.model == 'fluScorer' or args.model == 'flu_TFR':
-                flu_score = audio_model(feats, cluster_index)
-            elif args.model == 'fluScorerNoclu':
-                flu_score = audio_model(feats)
-            
-            flu_score = flu_score.to('cpu').detach()
-            flu_label = torch.unsqueeze(torch.unsqueeze(utt_label[:, args.aspect_idx], 1), 1)
+            if args.model == "ClusterScorer" or args.model == "TransformerScorer":
+                score = audio_model(feats, cluster_index)
+            elif args.model == "NonClusterScorer":
+                score = audio_model(feats)
 
-            A_flu.append(flu_score)
-            A_flu_target.append(flu_label)
+            score = score.to("cpu").detach()
+            if isinstance(args.aspect_indices, list):
+                labels = utt_label[:, args.aspect_indices]
+            else:
+                labels = torch.unsqueeze(utt_label[:, args.aspect_indices], 1)
+
+            A_flu.append(score)
+            A_flu_target.append(labels)
 
         A_flu, A_flu_target = torch.cat(A_flu), torch.cat(A_flu_target)
 
         # get the scores
-        flu_mse, flu_corr = valid_flu(A_flu, A_flu_target)
+        flu_mse, flu_corr, mse_list, corr_list = valid_flu(A_flu, A_flu_target)
 
         if flu_mse < best_mse:
-            print('\033[94mnew best flu mse {:.3f}, now saving predictions.\033[0m'.format(flu_mse))
+            print(
+                "\033[94mnew best flu mse {:.3f}, now saving predictions.\033[0m".format(
+                    flu_mse
+                )
+            )
             print(args.exp_dir)
             # create the directory
-            if os.path.exists(args.exp_dir + '/preds') == False:
-                os.mkdir(args.exp_dir + '/preds')
+            if os.path.exists(args.exp_dir + "/preds") == False:
+                os.mkdir(args.exp_dir + "/preds")
 
             # saving the phn target, only do once
-            if os.path.exists(args.exp_dir + '/preds/phn_target.npy') == False:
-                np.save(args.exp_dir + '/preds/flu_target.npy', A_flu_target)
+            if os.path.exists(args.exp_dir + "/preds/phn_target.npy") == False:
+                np.save(args.exp_dir + "/preds/flu_target.npy", A_flu_target)
 
-            np.save(args.exp_dir + '/preds/flu_pred.npy', A_flu)
+            np.save(args.exp_dir + "/preds/flu_pred.npy", A_flu)
 
-    return flu_mse, flu_corr
+    return flu_mse, flu_corr, mse_list, corr_list
+
 
 def valid_flu(audio_output, target):
-    valid_token_pred = audio_output.view(-1).numpy()
-    valid_token_target = target.view(-1).numpy()
-    # print(valid_token_pred)
-    # print(valid_token_target)
+    """
+    Validate fluency predictions, supporting multiple aspects.
 
-    valid_token_mse = np.mean((valid_token_pred - valid_token_target)**2)
-    corr_matrix = np.corrcoef(valid_token_pred, valid_token_target)
-    corr = corr_matrix[0, 1].item()
-    return valid_token_mse, corr
+    Args:
+        audio_output: (batch_size, num_aspects) or (batch_size, 1)
+        target: (batch_size, num_aspects) or (batch_size, 1)
+
+    Returns:
+        mse: average MSE across all aspects
+        corr: average correlation across all aspects
+        mse_list: list of MSE for each aspect (always a list)
+        corr_list: list of correlation for each aspect (always a list)
+    """
+    mse_list = []
+    corr_list = []
+
+    # Handle both single and multi-aspect cases
+    num_aspects = audio_output.shape[1] if audio_output.dim() == 2 else 1
+
+    # Calculate MSE and correlation for each aspect
+    for i in range(num_aspects):
+        if num_aspects == 1:
+            pred = audio_output.view(-1).numpy()
+            tgt = target.view(-1).numpy()
+        else:
+            pred = audio_output[:, i].numpy()
+            tgt = target[:, i].numpy()
+
+        aspect_mse = np.mean((pred - tgt) ** 2)
+        corr_matrix = np.corrcoef(pred, tgt)
+        aspect_corr = corr_matrix[0, 1].item()
+
+        mse_list.append(aspect_mse)
+        corr_list.append(aspect_corr)
+
+    # Return average MSE and correlation across all aspects, plus individual lists
+    valid_token_mse = np.mean(mse_list)
+    corr = np.mean(corr_list)
+
+    return valid_token_mse, corr, mse_list, corr_list
+
 
 def load_file(path):
-    file = np.loadtxt(path, delimiter=',', dtype=str)
+    file = np.loadtxt(path, delimiter=",", dtype=str)
     return file
+
 
 def custom_collate_fn(batch):
     # 將批次中的樣本按照 feat_x 的大小排序
     batch = sorted(batch, key=lambda x: x[2].shape[0], reverse=True)
-    
+
     # 提取排序後的資料
     paths, utt_labels, feats, index = zip(*batch)
-    
+
     # 將 feat_x 轉換成一個批次，這裡使用 pad_sequence 進行填充
     padded_feats = pad_sequence(feats, batch_first=True)
     padded_index = pad_sequence(index, batch_first=True, padding_value=-1)
 
     return paths, torch.stack(utt_labels), padded_feats, padded_index
 
+
 class fluDataset(Dataset):
     def __init__(self, set, so762_dir, load_cluster_index=None):
-        paths = load_file(f'{so762_dir}/{set}/wav.scp')
+        paths = load_file(f"{so762_dir}/{set}/wav.scp")
         # audio_list = []
         for i in range(paths.shape[0]):
-            paths[i] = paths[i].split('\t')[1]
+            paths[i] = paths[i].split("\t")[1]
 
-        if set == 'train':
-            dataset_type = 'tr'
-        elif set == 'test':
-            dataset_type = 'te'
+        if set == "train":
+            dataset_type = "tr"
+        elif set == "test":
+            dataset_type = "te"
         else:
-            print(f"Error: not such set called {set}")
+            raise ValueError(f"Error: not such set called {set}")
 
-        self.utt_label = torch.tensor(np.load(f'data/{dataset_type}_label_utt.npy'), dtype=torch.float)
+        self.utt_label = torch.tensor(
+            np.load(f"data/{dataset_type}_label_utt.npy"), dtype=torch.float
+        )
         self.paths = paths
         self.load_cluster_index = load_cluster_index
         if load_cluster_index:
-            with open(f'data/{dataset_type}_cluster_index.pkl', 'rb') as file:
+            with open(f"data/{dataset_type}_cluster_index.pkl", "rb") as file:
                 self.index = pickle.load(file)
 
-        with open(f'data/{dataset_type}_feats.pkl', 'rb') as file:
+        with open(f"data/{dataset_type}_feats.pkl", "rb") as file:
             self.feats = pickle.load(file)
 
         self.utt_label = self.utt_label * 0.2
@@ -347,16 +565,27 @@ class fluDataset(Dataset):
     def __getitem__(self, idx):
         if self.load_cluster_index:
             # audio, utt_label, feat_x, cluster_id
-            return self.paths[idx], self.utt_label[idx, :], self.feats[self.paths[idx]], self.index[self.paths[idx]]
+            return (
+                self.paths[idx],
+                self.utt_label[idx, :],
+                self.feats[self.paths[idx]],
+                self.index[self.paths[idx]],
+            )
         else:
             # audio, utt_label, feat_x
             return self.paths[idx], self.utt_label[idx, :], self.feats[self.paths[idx]]
 
-if __name__ == '__main__':
+
+def main():
     sys.path.append(os.path.dirname(os.path.dirname(sys.path[0])))
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser = set_arg(parser)
-    print("I am process %s, running on %s: starting (%s)" % (os.getpid(), os.uname()[1], time.asctime()))
+    print(
+        "I am process %s, running on %s: starting (%s)"
+        % (os.getpid(), os.uname()[1], time.asctime())
+    )
     args = parser.parse_args()
     if os.path.exists(args.exp_dir) == False:
         os.mkdir(args.exp_dir)
@@ -368,36 +597,68 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+    # TODO: this indices mapping are highly coupled with the dataset creation process in process_feat_seq_utt.py, need to refactor
     aspect_map = {
-        'acc': 0,
-        'cpn': 1,
-        'flu': 2,
-        'psd': 3,
-        'ttl': 4,
+        "accuracy": 0,
+        "completeness": 1,
+        "fluency": 2,
+        "prosodic": 3,
+        "total": 4,
     }
-    args.aspect_idx = aspect_map[args.aspect]
-    print(f'Training aspect: {args.aspect}')
+    args.aspect_indices = [aspect_map[aspect] for aspect in args.aspect]
+    if len(args.aspect_indices) == 1:
+        args.aspect_indices = args.aspect_indices[0]
 
-    print('Prepare datasets...')
-    tr_dataset = fluDataset('train', args.SO762_dir, args.load_cluster_index)
-    tr_dataloader = DataLoader(tr_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=custom_collate_fn)
-    # tr_dataloader = DataLoader(tr_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=custom_collate_fn)
-    te_dataset = fluDataset('test', args.SO762_dir, args.load_cluster_index)
-    te_dataloader = DataLoader(te_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=custom_collate_fn)
-    print('Done.')
+    print(f"Training aspect: {args.aspect}")
+
+    print("Prepare datasets...")
+    tr_dataset = fluDataset("train", args.SO762_dir, args.load_cluster_index)
+    tr_dataloader = DataLoader(
+        tr_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=custom_collate_fn,
+    )
+
+    te_dataset = fluDataset("test", args.SO762_dir, args.load_cluster_index)
+    te_dataloader = DataLoader(
+        te_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=custom_collate_fn,
+    )
+    print("Done.")
 
     input_dim = tr_dataset.feats[next(iter(tr_dataset.feats))].shape[1]
 
-
-    if args.model == 'fluScorer':
-        print('now train a fluScorer models')
-        audio_model = FluencyScorer(input_dim=input_dim, embed_dim=args.hidden_dim, clustering_dim=6)
-    elif args.model == 'fluScorerNoclu':
-        print('now train a fluScorer models <<no cluster>>')
-        audio_model = FluencyScorerNoclu(input_dim=input_dim, embed_dim=args.hidden_dim)
-    elif args.model == 'flu_TFR':
-        print('Train model: Flu_TFR')
-        audio_model = Flu_TFR(input_dim=input_dim,
-                                dropout_prob=args.dropout_prob, num_heads=args.num_heads, depth=args.depth)
+    if args.model == "ClusterScorer":
+        print("now train a ClusterScorer models")
+        audio_model = ClusterScorer(
+            input_dim=input_dim,
+            embed_dim=args.hidden_dim,
+            clustering_dim=6,
+            scorers=args.aspect,
+        )
+    elif args.model == "NonClusterScorer":
+        print("now train a NonClusterScorer models <<no cluster>>")
+        audio_model = NonClusterScorer(
+            input_dim=input_dim,
+            embed_dim=args.hidden_dim,
+            scorers=args.aspect,
+        )
+    elif args.model == "TransformerScorer":
+        print("Train model: TransformerScorer")
+        audio_model = TransformerScorer(
+            input_dim=input_dim,
+            dropout_prob=args.dropout_prob,
+            num_heads=args.num_heads,
+            depth=args.depth,
+        )
+    else:
+        raise ValueError(f"Unknown model type: {args.model}")
 
     train(audio_model, tr_dataloader, te_dataloader, args)
+
+
+if __name__ == "__main__":
+    main()

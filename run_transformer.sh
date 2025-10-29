@@ -1,6 +1,6 @@
 #!/bin/bash
 set -x
-
+source .env
 lr=1e-3
 batch_size=25
 hidden_dim=32
@@ -10,16 +10,20 @@ gpu_index=0
 use_device='cuda'
 depth=3
 num_heads=1
-SO762_dir=
+SO762_dir=${SPEECHOCEAN762_DIR}
 load_cluster_index=True
 
-tag=SSL_feat_fluTFR
-model=flu_TFR
+
+model=TransformerScorer
 model(){
-  fluScorerNoclu
-  fluScorer
-  flu_TFR
+  NonClusterScorer
+  ClusterScorer
+  TransformerScorer
 }
+
+aspect="fluency prosodic"
+tag_aspect=${aspect// /+}
+tag=SSL_feat_${tag_aspect}TFR
 
 exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}/br
 

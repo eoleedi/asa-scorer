@@ -1,4 +1,4 @@
-SO762_dir=../speechocean762
+SO762_dir=${SPEECHOCEAN762_DIR}
 score_json_file='scores.json'
 feat_dir=../data
 

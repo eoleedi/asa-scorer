@@ -1,27 +1,29 @@
 import logging
 import os
 import sys
+import pickle
+
 import torch
 import torchaudio
-from transformers import Wav2Vec2Model, HubertModel
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from tqdm import tqdm
-import pickle
 
-from force_align import get_trellis, backtrack 
+from force_align import get_trellis, backtrack
+
 
 class bcolors:
-    HEADER = '\033[95m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    GREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+    HEADER = "\033[95m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -31,17 +33,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
+
 def load_file(path):
-    file = np.loadtxt(path, delimiter=',', dtype=str)
+    file = np.loadtxt(path, delimiter=",", dtype=str)
     return file
+
 
 class fluDataset(Dataset):
     def __init__(self, types):
-        paths = load_file(f'../speechocean762/{types}/wav.scp')
-        texts = load_file(f'../speechocean762/{types}/text')
+        paths = load_file(f"../speechocean762/{types}/wav.scp")
+        texts = load_file(f"../speechocean762/{types}/text")
         for i in range(paths.shape[0]):
-            paths[i] = paths[i].split('\t')[1]
-            texts[i] = texts[i].split('\t')[1]
+            paths[i] = paths[i].split("\t")[1]
+            texts[i] = texts[i].split("\t")[1]
         self.paths, self.texts = paths, texts
 
     def __len__(self):
@@ -102,10 +106,11 @@ def get_align_index(dataLoader, dataset_type, device, SO762_dir, feat_dir):
                 saved_tensor_dict[path] = extract_feat_list[j]
                 # print(saved_tensor_dict[path])
 
-    with open(f'{feat_dir}/{dataset_type}_indexs.pkl', 'wb') as file:
+    with open(f"{feat_dir}/{dataset_type}_indexs.pkl", "wb") as file:
         pickle.dump(saved_tensor_dict, file)
 
-    return 
+    return
+
 
 def main(
     gpu,
@@ -118,24 +123,25 @@ def main(
         device = torch.device("cpu")
 
     batch_size = 1
-    tr_dataset = fluDataset('train')
-    te_dataset = fluDataset('test')
+    tr_dataset = fluDataset("train")
+    te_dataset = fluDataset("test")
     tr_dataloader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=False)
     te_dataloader = DataLoader(te_dataset, batch_size=batch_size, shuffle=False)
 
-    get_align_index(tr_dataloader, 'tr', device, SO762_dir, feat_dir)
-    get_align_index(te_dataloader, 'te', device, SO762_dir, feat_dir)
+    get_align_index(tr_dataloader, "tr", device, SO762_dir, feat_dir)
+    get_align_index(te_dataloader, "te", device, SO762_dir, feat_dir)
 
     logger.info(f"{bcolors.YELLOW}finished successfully{bcolors.ENDC}")
-    return 
+    return
+
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", default=True, type=bool, help="use gpu or not")
-    parser.add_argument("SO762_dir", type=str, default='../speechocean762')
-    parser.add_argument("--feat_dir", type=str, default='../data')
+    parser.add_argument("SO762_dir", type=str, default="../speechocean762")
+    parser.add_argument("--feat_dir", type=str, default="../data")
 
     args = parser.parse_args()
     logging.info(str(args))

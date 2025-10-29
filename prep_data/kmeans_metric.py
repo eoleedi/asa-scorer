@@ -1,23 +1,28 @@
+import pickle
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import pickle
 import joblib
-from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+from sklearn.metrics import (
+    davies_bouldin_score,
+    calinski_harabasz_score,
+)
 
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument("SO762_dir", type=str, default='../speechocean762')
-parser.add_argument("--feat_dir", type=str, default='../data')
-parser.add_argument("--output_dir", type=str, default='../exp/kmeans')
+parser.add_argument("SO762_dir", type=str, default="../speechocean762")
+parser.add_argument("--feat_dir", type=str, default="../data")
+parser.add_argument("--output_dir", type=str, default="../exp/kmeans")
 args = parser.parse_args()
+
 
 def load_feature(dataLoader, dataset_type):
     extract_feat_list = []
-    file_path = f'{args.feat_dir}/{dataset_type}_feats.pkl'
+    file_path = f"{args.feat_dir}/{dataset_type}_feats.pkl"
 
-    with open(file_path, 'rb') as file:
+    with open(file_path, "rb") as file:
         saved_tensor_dict = pickle.load(file)
 
     for j, (paths, utt_label) in enumerate(dataLoader):
@@ -28,6 +33,7 @@ def load_feature(dataLoader, dataset_type):
     extract_feat_tensor = torch.concat(extract_feat_list, dim=0)
     print(extract_feat_tensor.shape)
     return extract_feat_tensor, saved_tensor_dict
+
 
 def cluster_pred(dataLoader, saved_tensor_dict, dataset_type):
     cluster_pred_dict = {}
@@ -41,24 +47,30 @@ def cluster_pred(dataLoader, saved_tensor_dict, dataset_type):
             if path not in cluster_pred_dict:
                 cluster_pred_dict[path] = cluster_pred_tensor
 
-    with open(f'{args.feat_dir}/{dataset_type}_cluster_index.pkl', 'wb') as file:
+    with open(f"{args.feat_dir}/{dataset_type}_cluster_index.pkl", "wb") as file:
         pickle.dump(cluster_pred_dict, file)
-    if dataset_type == 'te':
-        return 
+    if dataset_type == "te":
+        return
+
 
 def load_file(path):
-    file = np.loadtxt(path, delimiter=',', dtype=str)
+    file = np.loadtxt(path, delimiter=",", dtype=str)
     return file
+
 
 class fluDataset(Dataset):
     def __init__(self, set):
-        paths = load_file(f'{args.SO762_dir}/{set}/wav.scp')
+        paths = load_file(f"{args.SO762_dir}/{set}/wav.scp")
         for i in range(paths.shape[0]):
-            paths[i] = paths[i].split('\t')[1]
-        if set == 'train':
-            self.utt_label = torch.tensor(np.load(f'{args.feat_dir}/tr_label_utt.npy'), dtype=torch.float)
-        elif set == 'test':
-            self.utt_label = torch.tensor(np.load(f'{args.feat_dir}/te_label_utt.npy'), dtype=torch.float)
+            paths[i] = paths[i].split("\t")[1]
+        if set == "train":
+            self.utt_label = torch.tensor(
+                np.load(f"{args.feat_dir}/tr_label_utt.npy"), dtype=torch.float
+            )
+        elif set == "test":
+            self.utt_label = torch.tensor(
+                np.load(f"{args.feat_dir}/te_label_utt.npy"), dtype=torch.float
+            )
         self.paths = paths
 
     def __len__(self):
@@ -68,38 +80,39 @@ class fluDataset(Dataset):
         # audio, utt_label
         return self.paths[idx], self.utt_label[idx, :]
 
+
 batch_size = 1
 
-tr_dataset = fluDataset('train')
+tr_dataset = fluDataset("train")
 tr_dataloader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=False)
-te_dataset = fluDataset('test')
+te_dataset = fluDataset("test")
 te_dataloader = DataLoader(te_dataset, batch_size=batch_size, shuffle=False)
 
 model_path = args.output_dir
-cluster = joblib.load(f'{model_path}/kmeans_model.joblib')
+cluster = joblib.load(f"{model_path}/kmeans_model.joblib")
 
 
-extract_feat_tensor, saved_tensor_dict = load_feature(tr_dataloader, 'tr')
-print('<train>')
+extract_feat_tensor, saved_tensor_dict = load_feature(tr_dataloader, "tr")
+print("<train>")
 feat_numpy = extract_feat_tensor.cpu().numpy()
 labels = cluster.predict(feat_numpy)
 
 db_score = davies_bouldin_score(feat_numpy, labels)
-print(f'Davies-Bouldin Score: {db_score :.3f} (⬇)')
+print(f"Davies-Bouldin Score: {db_score :.3f} (⬇)")
 ch_score = calinski_harabasz_score(feat_numpy, labels)
-print(f'Calinski-Harabasz Score: {ch_score :.3f} (⬆)')
+print(f"Calinski-Harabasz Score: {ch_score :.3f} (⬆)")
 # si_score = silhouette_score(feat_numpy, cluster.labels_)
 # print(f'Silhouette_score: {si_score}'(⬆))
 
 
-print('<test>')
-extract_feat_tensor, saved_tensor_dict = load_feature(te_dataloader, 'te')
+print("<test>")
+extract_feat_tensor, saved_tensor_dict = load_feature(te_dataloader, "te")
 feat_numpy = extract_feat_tensor.cpu().numpy()
 labels = cluster.predict(feat_numpy)
 
 db_score = davies_bouldin_score(feat_numpy, labels)
-print(f'Davies-Bouldin Score: {db_score :.3f} (⬇)')
+print(f"Davies-Bouldin Score: {db_score :.3f} (⬇)")
 ch_score = calinski_harabasz_score(feat_numpy, labels)
-print(f'Calinski-Harabasz Score: {ch_score :.3f} (⬆)')
+print(f"Calinski-Harabasz Score: {ch_score :.3f} (⬆)")
 
-print('Mission Completed.')
+print("Mission Completed.")

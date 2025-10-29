@@ -1,5 +1,6 @@
 #!/bin/bash
 set -x
+source .env
 stage=1
 stop_stage=1000
 
@@ -12,24 +13,25 @@ gpu_index=0
 use_device='cuda'
 depth=3
 num_heads=1
-SO762_dir=
+SO762_dir=${SPEECHOCEAN762_DIR}
 load_cluster_index=True
 
-model=fluScorer
+model=ClusterScorer
 model(){
-  fluScorerNoclu
-  fluScorer
-  flu_TFR
+  NonClusterScorer
+  ClusterScorer
+  TransformerScorer
 }
 
-aspect=flu
-tag=SSLfeat_${aspect}Score
+aspect="fluency prosodic"
+tag_aspect=${aspect// /+}
+tag=SSLfeat_${tag_aspect}Score
 # acc cpn flu psd ttl
 
 exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
 
 # repeat times
-repeat_list=(0 1 2 3 4)
+repeat_list=(0)
 seed_list=(0 11 22 33 44)
 
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then

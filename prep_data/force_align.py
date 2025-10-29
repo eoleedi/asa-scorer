@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import torch
 
+
 def get_trellis(emission, tokens, blank_id=0):
     num_frame = emission.size(0)
     num_tokens = len(tokens)
@@ -19,11 +20,13 @@ def get_trellis(emission, tokens, blank_id=0):
         )
     return trellis
 
+
 @dataclass
 class Point:
     token_index: int
     time_index: int
     score: float
+
 
 def backtrack(trellis, emission, tokens, blank_id=0):
     t, j = trellis.size(0) - 1, trellis.size(1) - 1
@@ -59,4 +62,3 @@ def backtrack(trellis, emission, tokens, blank_id=0):
         t -= 1
 
     return path[::-1]
-    
