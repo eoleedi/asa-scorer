@@ -12,6 +12,17 @@ But, the repo will complete as soon as possible.
 The SpeechOcean762 dataset used in my work is an open dataset licenced with CC BY 4.0. 
 If You have downloaded speechocean762 for yourself, you can create a `.env` file and define the `SPEECHOCEAN_DIR` environment variable.
 
+## Setup
+1. Create Conda environment
+    ```
+    conda create -n prosody_scorer python=3.11
+    ```
+2. Install requirements 
+    ```
+    conda activate prosody_scorer
+    pip install -r requirements.txt
+    ```
+
 ## Directions for The Programs
 ### The Input Features and Labels
 The input generation program are in `prep_data`.
