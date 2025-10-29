@@ -36,6 +36,19 @@ def get_arguments():
         default=["fluency"],
         help="aspect to evaluate (e.g., fluency)",
     )
+    # Sliding window options (ms). window_ms=0 disables sliding (use full utterance)
+    parser.add_argument(
+        "--window-ms",
+        type=int,
+        default=5000,
+        help="window length in milliseconds for sliding-window inference (0 = full utterance)",
+    )
+    parser.add_argument(
+        "--hop-ms",
+        type=int,
+        default=4000,
+        help="hop length in milliseconds for sliding-window inference (0 -> equals window-ms)",
+    )
     args = parser.parse_args()
     return args
 
@@ -119,31 +132,85 @@ def main():
 
     predictions = []
 
-    # Run inference
+    # Helper: sliding windows over waveform (returns list of 1D tensors)
+    def make_windows(waveform_1d: torch.Tensor, sr: int, window_ms: int, hop_ms: int):
+        # waveform_1d: [N]
+        N = waveform_1d.shape[0]
+        if window_ms <= 0:
+            return [waveform_1d]
+        win = int(window_ms * sr / 1000)
+        hop = int(hop_ms * sr / 1000) if hop_ms > 0 else win
+        if win <= 0:
+            return [waveform_1d]
+        windows = []
+        start = 0
+        while start < N:
+            end = start + win
+            if end <= N:
+                seg = waveform_1d[start:end]
+            else:
+                # pad
+                pad = torch.zeros(
+                    end - N, dtype=waveform_1d.dtype, device=waveform_1d.device
+                )
+                seg = torch.cat((waveform_1d[start:N], pad), dim=0)
+            windows.append(seg)
+            if end >= N:
+                break
+            start += hop
+        return windows
+
+    # Run inference (with optional sliding-window)
     for item in tqdm(data):
         audio = item["audio"]
         target = [item[aspect] for aspect in args.aspect]
         target = torch.tensor(target, dtype=torch.float32).unsqueeze(0)
         # Apply same scaling as used during training (from train.py fluDataset)
         target = target * 0.2
-        waveform = (
-            torch.tensor(audio["array"], dtype=torch.float32).unsqueeze(0).to(device)
-        )
+
+        # waveform array from datasets audio feature
+        array = audio["array"]
+        sr = int(audio["sampling_rate"])
+        wav = torch.tensor(array, dtype=torch.float32).to(device)
+        # ensure 1d
+        if wav.dim() == 2:
+            wav = wav.squeeze(0)
+
+        window_ms = getattr(args, "window_ms", 5000)
+        hop_ms = getattr(args, "hop_ms", 4000)
+        windows = make_windows(wav, sr, window_ms, hop_ms)
+
+        window_preds = []
         with torch.no_grad():
-            # Extract features from all layers and take layer 14 (matching training pipeline)
-            audio_embedding, _ = feature_extractor.extract_features(waveform)
-            # audio_embedding is a list of tensors from all layers, take layer 14
-            features = audio_embedding[14]  # Take layer 14 output (B, T, D)
-            if features.dim() == 2:
-                features = features.unsqueeze(0)  # Ensure (B, T, D) format
-            # Get cluster ids
-            B, T, D = features.shape
-            flat_features = features.reshape(-1, D).cpu().numpy()
-            cluster_ids = kmeans_model.predict(flat_features)
-            cluster_ids = torch.tensor(cluster_ids).reshape(B, T).to(device).long()
-            # Get prediction
-            pred = audio_model(features, cluster_ids)
-            predictions.append((pred.cpu(), target))
+            for w in windows:
+                # HuBERT expects shape (batch, time)
+                w_batch = w.unsqueeze(0)
+                audio_embedding, _ = feature_extractor.extract_features(w_batch)
+                features = audio_embedding[14]
+                if features.dim() == 2:
+                    features = features.unsqueeze(0)
+                B, T, D = features.shape
+                flat_features = features.reshape(-1, D).cpu().numpy()
+                cluster_ids_np = kmeans_model.predict(flat_features)
+                cluster_ids = (
+                    torch.tensor(cluster_ids_np, dtype=torch.long)
+                    .reshape(B, T)
+                    .to(device)
+                )
+                pred = audio_model(features, cluster_ids)
+                # pred: (1, num_aspects) or (1,) -> ensure 2D
+                if pred.dim() == 1:
+                    pred = pred.unsqueeze(0)
+                window_preds.append(pred.cpu())
+
+        # Aggregate window predictions
+        if len(window_preds) == 0:
+            # fallback: zero prediction
+            agg_pred = torch.zeros(1, len(args.aspect), dtype=torch.float32)
+        else:
+            agg_pred = torch.mean(torch.cat(window_preds, dim=0), dim=0, keepdim=True)
+
+        predictions.append((agg_pred, target))
 
     # Validate predictions
     all_preds = torch.cat([p[0] for p in predictions], dim=0)
