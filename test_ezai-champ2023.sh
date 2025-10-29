@@ -1,3 +1,5 @@
+sh path.sh
+
 python test.py \
     --dataset eoleedi/ezai-championship2023 \
     --model ClusterScorer \

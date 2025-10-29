@@ -1,3 +1,5 @@
+sh path.sh
+
 python test.py \
     --dataset mispeech/speechocean762 \
     --model ClusterScorer \
