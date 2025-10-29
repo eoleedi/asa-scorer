@@ -44,11 +44,15 @@ If you choose this for the resource of cluster ID, you need to update the `run.s
 ./run.sh
 ```
 
-## Results And Performance
+## Results
+### SpeechOcean762
+| Model             | Fluency PCC | Prosodic PCC |
+|-------------------|:-----------:|:------------:|
+| ClusterScorer     |    0.79     |     0.80     |
 
-| Models             | Utt FLU PCC |
-|--------------------|:------------:|
-| GOPT (Librispeech)    |     0.756    |
-| Proposed paper        |   **0.795**  |
-| FluScorer+cluster_idx |     0.753    |
-| Flu_TFR+cluster_idx   |     0.790    |
+### Ezai-championship2023 (OOD)
+| Model             | Fluency PCC | Prosodic PCC |
+|-------------------|:-----------:|:------------:|
+| ClusterScorer     |   0.352    |    0.346    |
+| + Window Sliding  |   0.370    |    0.463    |
+
