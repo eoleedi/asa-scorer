@@ -5,6 +5,7 @@ import joblib
 import torch
 import torchaudio
 from models import ClusterScorer, NonClusterScorer, TransformerScorer
+from scipy.stats import spearmanr
 
 from tqdm import tqdm
 
@@ -63,17 +64,20 @@ def valid_predictions(audio_output, target):
 
     Returns:
         mse: average MSE across all aspects
-        corr: average correlation across all aspects
+        pcc: average Pearson correlation across all aspects
+        spc: average Spearman correlation across all aspects
         mse_list: list of MSE for each aspect (always a list)
-        corr_list: list of correlation for each aspect (always a list)
+        pcc_list: list of Pearson correlation for each aspect (always a list)
+        spc_list: list of Spearman correlation for each aspect (always a list)
     """
     mse_list = []
-    corr_list = []
+    pcc_list = []
+    spc_list = []
 
     # Handle both single and multi-aspect cases
     num_aspects = audio_output.shape[1] if audio_output.dim() == 2 else 1
 
-    # Calculate MSE and correlation for each aspect
+    # Calculate MSE, Pearson correlation, and Spearman correlation for each aspect
     for i in range(num_aspects):
         if num_aspects == 1:
             pred = audio_output.view(-1).numpy()
@@ -83,17 +87,24 @@ def valid_predictions(audio_output, target):
             tgt = target[:, i].numpy()
 
         aspect_mse = np.mean((pred - tgt) ** 2)
+        
+        # Pearson correlation
         corr_matrix = np.corrcoef(pred, tgt)
-        aspect_corr = corr_matrix[0, 1].item()
+        aspect_pcc = corr_matrix[0, 1].item()
+        
+        # Spearman correlation
+        aspect_spc, _ = spearmanr(pred, tgt)
 
         mse_list.append(aspect_mse)
-        corr_list.append(aspect_corr)
+        pcc_list.append(aspect_pcc)
+        spc_list.append(aspect_spc)
 
-    # Return average MSE and correlation across all aspects, plus individual lists
+    # Return average metrics across all aspects, plus individual lists
     valid_token_mse = np.mean(mse_list)
-    corr = np.mean(corr_list)
+    avg_pcc = np.mean(pcc_list)
+    avg_spc = np.mean(spc_list)
 
-    return valid_token_mse, corr, mse_list, corr_list
+    return valid_token_mse, avg_pcc, avg_spc, mse_list, pcc_list, spc_list
 
 
 def main():
@@ -216,13 +227,13 @@ def main():
     all_preds = torch.cat([p[0] for p in predictions], dim=0)
     all_targets = torch.cat([p[1] for p in predictions], dim=0)
 
-    avg_mse, avg_corr, mse_list, corr_list = valid_predictions(all_preds, all_targets)
+    avg_mse, avg_pcc, avg_spc, mse_list, pcc_list, spc_list = valid_predictions(all_preds, all_targets)
 
     for i, aspect in enumerate(args.aspect):
         print(
-            f"Aspect: {aspect} - MSE: {mse_list[i]:.4f}, Correlation: {corr_list[i]:.4f}"
+            f"Aspect: {aspect} - MSE: {mse_list[i]:.4f}, PCC: {pcc_list[i]:.4f}, SPC: {spc_list[i]:.4f}"
         )
-    print(f"Average MSE: {avg_mse:.4f}, Average Correlation: {avg_corr:.4f}")
+    print(f"Average MSE: {avg_mse:.4f}, Average PCC: {avg_pcc:.4f}, Average SPC: {avg_spc:.4f}")
 
 
 if __name__ == "__main__":
