@@ -1,4 +1,4 @@
-# Fluency Scorer
+# ASA Scorer
 
 ## Introduction
 It's my implementation for speech fluency assessment model. 
@@ -15,13 +15,34 @@ If You have downloaded speechocean762 for yourself, you can create a `.env` file
 ## Setup
 1. Create Conda environment
     ```
-    conda create -n prosody_scorer python=3.11
+    conda create -n asa_scorer python=3.11
     ```
 2. Install requirements 
     ```
-    conda activate prosody_scorer
+    conda activate asa_scorer
     pip install -r requirements.txt
     ```
+
+## Inference
+1. Download the pretrained model (audio and kmeans model)
+    https://drive.google.com/drive/folders/1439B6_JRJbmr_zB2PWBSYHRwJDbxGDrP?usp=sharing
+2. Activate the conda environment
+    ```
+    conda activate asa_scorer
+    ```
+3. Run Inference
+    ```
+    python inference.py path/to/audio \
+        --kmeans_model path/to/kmeans_model.joblib \
+        --checkpoint path/to/asa-scorer-cluster_fluency+prosodic.pth \ 
+        --aspect fluency prosodic
+    ```
+
+It will predict the score accordingly.
+
+Specifically, it produce something like the below with the flency and prosodic score in order between 0-2.
+
+    Prediction(0-2): [[0.8962262 0.9108325]]
 
 ## Directions for The Programs
 ### The Input Features and Labels
