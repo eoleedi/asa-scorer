@@ -5,17 +5,16 @@ import os
 import time
 import random
 import argparse
-import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
 import joblib
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader
 
 from models import ClusterScorer, NonClusterScorer, TransformerScorer
+from speech_datasets import create_dataset, custom_collate_fn
 
 aspect_name_map = {
     "acc": "accuracy",
@@ -83,16 +82,36 @@ def set_arg(parser):
         "--dropout_prob", type=float, default=0.1, help="dropout probability"
     )
     parser.add_argument(
-        "--SO762_dir",
+        "--dataset_type",
         type=str,
-        default="speechocean762",
-        help="directory of speechocean762",
+        default="so762",
+        help="Type of dataset: 'so762', 'huggingface', or HuggingFace dataset name (e.g., 'eoleedi/ezai-championship2023')",
     )
     parser.add_argument(
-        "--load_cluster_index", type=bool, default=False, help="load cluster index"
+        "--data_dir",
+        type=str,
+        default="data/speechocean762",
+        help="Directory of the dataset (for SO762 dataset)",
     )
+    parser.add_argument(
+        "--train_split",
+        type=str,
+        default="train",
+        help="Dataset split to use for training (default: train)",
+    )
+    parser.add_argument(
+        "--test_split",
+        type=str,
+        default="test",
+        help="Dataset split to use for testing (default: test)",
+    )
+    parser.add_argument(
+        "--load_cluster_index", type=bool, default=False, help="load cluster index (deprecated - auto-detected)"
+    )
+    parser.add_argument("--kmeans_model", type=str, default="exp/kmeans/so762/kmeans_model.joblib", help="kmeans model path")
     parser.add_argument("--seed", type=int, default=66)
     parser.add_argument("--aspect", nargs="+", default=["fluency"])
+    parser.add_argument("--max_duration_sec", type=float, default=30.0, help="Max audio duration in seconds (for HuggingFace datasets)")
     return parser
 
 
@@ -225,7 +244,7 @@ def train(audio_model, train_loader, test_loader, args):
     audio_model = audio_model.to(device)
 
     if args.model == "ClusterScorer" or args.model == "TransformerScorer":
-        kmeans_model = joblib.load(f"exp/kmeans/kmeans_model.joblib")
+        kmeans_model = joblib.load(args.kmeans_model)
     else:
         kmeans_model = None
 
@@ -298,10 +317,10 @@ def train(audio_model, train_loader, test_loader, args):
             else:
                 raise ValueError(f"Model {args.model} not recognized.")
 
-            if isinstance(args.aspect_indices, list):
-                labels = utt_label[:, args.aspect_indices]
-            else:
-                labels = torch.unsqueeze(utt_label[:, args.aspect_indices], 1)
+            # Labels are already filtered by the dataset, no need to index again
+            labels = utt_label
+            if labels.dim() == 1:
+                labels = labels.unsqueeze(1)
             labels = labels.to(device, non_blocking=True)
             loss = loss_fn(pred, labels)
 
@@ -436,10 +455,10 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
                 score = audio_model(feats)
 
             score = score.to("cpu").detach()
-            if isinstance(args.aspect_indices, list):
-                labels = utt_label[:, args.aspect_indices]
-            else:
-                labels = torch.unsqueeze(utt_label[:, args.aspect_indices], 1)
+            # Labels are already filtered by the dataset, no need to index again
+            labels = utt_label
+            if labels.dim() == 1:
+                labels = labels.unsqueeze(1)
 
             A_flu.append(score)
             A_flu_target.append(labels)
@@ -512,70 +531,6 @@ def valid_flu(audio_output, target):
     return valid_token_mse, corr, mse_list, corr_list
 
 
-def load_file(path):
-    file = np.loadtxt(path, delimiter=",", dtype=str)
-    return file
-
-
-def custom_collate_fn(batch):
-    # 將批次中的樣本按照 feat_x 的大小排序
-    batch = sorted(batch, key=lambda x: x[2].shape[0], reverse=True)
-
-    # 提取排序後的資料
-    paths, utt_labels, feats, index = zip(*batch)
-
-    # 將 feat_x 轉換成一個批次，這裡使用 pad_sequence 進行填充
-    padded_feats = pad_sequence(feats, batch_first=True)
-    padded_index = pad_sequence(index, batch_first=True, padding_value=-1)
-
-    return paths, torch.stack(utt_labels), padded_feats, padded_index
-
-
-class fluDataset(Dataset):
-    def __init__(self, set, so762_dir, load_cluster_index=None):
-        paths = load_file(f"{so762_dir}/{set}/wav.scp")
-        # audio_list = []
-        for i in range(paths.shape[0]):
-            paths[i] = paths[i].split("\t")[1]
-
-        if set == "train":
-            dataset_type = "tr"
-        elif set == "test":
-            dataset_type = "te"
-        else:
-            raise ValueError(f"Error: not such set called {set}")
-
-        self.utt_label = torch.tensor(
-            np.load(f"data/{dataset_type}_label_utt.npy"), dtype=torch.float
-        )
-        self.paths = paths
-        self.load_cluster_index = load_cluster_index
-        if load_cluster_index:
-            with open(f"data/{dataset_type}_cluster_index.pkl", "rb") as file:
-                self.index = pickle.load(file)
-
-        with open(f"data/{dataset_type}_feats.pkl", "rb") as file:
-            self.feats = pickle.load(file)
-
-        self.utt_label = self.utt_label * 0.2
-
-    def __len__(self):
-        return self.utt_label.size(0)
-
-    def __getitem__(self, idx):
-        if self.load_cluster_index:
-            # audio, utt_label, feat_x, cluster_id
-            return (
-                self.paths[idx],
-                self.utt_label[idx, :],
-                self.feats[self.paths[idx]],
-                self.index[self.paths[idx]],
-            )
-        else:
-            # audio, utt_label, feat_x
-            return self.paths[idx], self.utt_label[idx, :], self.feats[self.paths[idx]]
-
-
 def main():
     sys.path.append(os.path.dirname(os.path.dirname(sys.path[0])))
     parser = argparse.ArgumentParser(
@@ -597,7 +552,8 @@ def main():
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    # TODO: this indices mapping are highly coupled with the dataset creation process in process_feat_seq_utt.py, need to refactor
+    # Aspect mapping is now handled in the dataset classes
+    # Keep this for backward compatibility with old code paths
     aspect_map = {
         "accuracy": 0,
         "completeness": 1,
@@ -609,30 +565,73 @@ def main():
     if len(args.aspect_indices) == 1:
         args.aspect_indices = args.aspect_indices[0]
 
-    print(f"Training aspect: {args.aspect}")
+    print(f"Training aspects: {args.aspect}")
 
-    print("Prepare datasets...")
-    tr_dataset = fluDataset("train", args.SO762_dir, args.load_cluster_index)
+    print("Preparing datasets...")
+    
+    # Load kmeans model if using cluster-based models
+    kmeans_model = None
+    if args.model == "ClusterScorer" or args.model == "TransformerScorer":
+        if os.path.exists(args.kmeans_model):
+            kmeans_model = joblib.load(args.kmeans_model)
+            print(f"Loaded kmeans model from: {args.kmeans_model}")
+        else:
+            print(f"Warning: kmeans model not found at {args.kmeans_model}")
+    
+    # Determine device for feature extraction
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Create datasets using the factory function
+    print(f"Dataset type: {args.dataset_type}")
+    print(f"Train split: {args.train_split}, Test split: {args.test_split}")
+    
+    tr_dataset = create_dataset(
+        dataset_type=args.dataset_type,
+        split=args.train_split,
+        aspects=args.aspect,
+        kmeans_model=kmeans_model,
+        device=device,
+        data_dir=args.data_dir,
+        dataset_name=args.dataset_type,  # For HuggingFace datasets
+        max_duration_sec=args.max_duration_sec,
+    )
+    
+    te_dataset = create_dataset(
+        dataset_type=args.dataset_type,
+        split=args.test_split,
+        aspects=args.aspect,
+        kmeans_model=kmeans_model,
+        device=device,
+        data_dir=args.data_dir,
+        dataset_name=args.dataset_type,  # For HuggingFace datasets
+        max_duration_sec=args.max_duration_sec,
+    )
+    
+    # Create data loaders
     tr_dataloader = DataLoader(
         tr_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         collate_fn=custom_collate_fn,
     )
-
-    te_dataset = fluDataset("test", args.SO762_dir, args.load_cluster_index)
+    
     te_dataloader = DataLoader(
         te_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=custom_collate_fn,
     )
-    print("Done.")
+    
+    # Get input dimension from first sample
+    first_sample = tr_dataset[0]
+    input_dim = first_sample[2].shape[1]  # features are at index 2
+    
+    print(f"Dataset prepared. Input dimension: {input_dim}")
+    print(f"Training samples: {len(tr_dataset)}, Test samples: {len(te_dataset)}")
 
-    input_dim = tr_dataset.feats[next(iter(tr_dataset.feats))].shape[1]
-
+    # Create model
     if args.model == "ClusterScorer":
-        print("now train a ClusterScorer models")
+        print("Training ClusterScorer model")
         audio_model = ClusterScorer(
             input_dim=input_dim,
             embed_dim=args.hidden_dim,
@@ -640,14 +639,14 @@ def main():
             scorers=args.aspect,
         )
     elif args.model == "NonClusterScorer":
-        print("now train a NonClusterScorer models <<no cluster>>")
+        print("Training NonClusterScorer model (no clustering)")
         audio_model = NonClusterScorer(
             input_dim=input_dim,
             embed_dim=args.hidden_dim,
             scorers=args.aspect,
         )
     elif args.model == "TransformerScorer":
-        print("Train model: TransformerScorer")
+        print("Training TransformerScorer model")
         audio_model = TransformerScorer(
             input_dim=input_dim,
             dropout_prob=args.dropout_prob,

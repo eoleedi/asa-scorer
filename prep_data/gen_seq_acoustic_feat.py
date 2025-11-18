@@ -1,5 +1,6 @@
 import pickle
 import argparse
+import os
 
 import torch
 import torchaudio
@@ -62,7 +63,25 @@ def extract_feature(dataLoader, dataset_type):
         # load waveform
         audio_list = []
         for path in paths:
-            waveform, sample_rate = torchaudio.load(f"{args.SO762_dir}/{path}")
+            # Determine the full audio path
+            # Path from wav.scp can be:
+            # 1. Relative to SO762_dir/train or SO762_dir/test (e.g., "wav/file.wav" or "relative/path.wav")
+            # 2. Absolute path
+            # We need to check which dataset_type we're in to build the correct path
+            
+            if os.path.isabs(path):
+                # Path is absolute
+                audio_path = path
+            elif os.path.exists(path):
+                # Path exists as-is (relative to current directory)
+                audio_path = path
+            else:
+                # For SO762-style datasets, paths are relative to {SO762_dir}/{dataset_type}/
+                # dataset_type is 'train' or 'test'
+                split_name = "train" if dataset_type == "tr" else "test"
+                audio_path = os.path.join(args.SO762_dir, split_name, path)
+            
+            waveform, sample_rate = torchaudio.load(audio_path)
             audio_list.append(waveform)
 
         max_length = max(waveform.size(1) for waveform in audio_list)

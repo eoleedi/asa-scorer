@@ -9,8 +9,16 @@ These implementations are unofficial, and there might be some bugs that I missed
 But, the repo will complete as soon as possible.
 
 ## Data
+### SpeechOcean762
 The SpeechOcean762 dataset used in my work is an open dataset licenced with CC BY 4.0. 
 If You have downloaded speechocean762 for yourself, you can create a `.env` file and define the `SPEECHOCEAN_DIR` environment variable.
+
+### HuggingFace Datasets
+The project now supports training and testing on HuggingFace datasets, including:
+- **ezai-championship2023** (`eoleedi/ezai-championship2023`)
+- Any other compatible dataset with audio and fluency/prosodic scores
+
+No manual download required - datasets are automatically fetched from HuggingFace.
 
 ## Setup
 1. Create Conda environment
@@ -46,17 +54,36 @@ Specifically, it produce something like the below with the flency and prosodic s
 
 ## Directions for The Programs
 ### The Input Features and Labels
+
+#### For SpeechOcean762 Dataset
 The input generation program are in `prep_data`.
 Just run the shell script in `prep_data`.
-```
+```bash
 cd prep_data
 ./run.sh
 ```
+
+#### For ezai-championship2023 Dataset
+Use the dedicated preparation script:
+```bash
+cd prep_data
+./run_prep_ezai-champ2023.sh
+```
+
+#### For Other HuggingFace Datasets
+```bash
+cd prep_data
+./run_prep_hf.sh "dataset-name/dataset-id" "train_split" "test_split"
+```
+
+**What these scripts do:**
 - The labels are fluency scores in speechocean762.
 - The acoustic features are extracted by **HuBert_Large**, where the dim is the value of 1024.
 - The feats and labels files are collected in `data`.
 - The cluster model is trained in `train_kmeans.py`, the model will be saved in `exp/kmeans`, which is used in fluency_scoring training later. 
 - `kmeans_metric.py` is used to take a look the performance of kmeans clustering.
+
+See [prep_data/README.md](prep_data/README.md) for detailed documentation.
 
 【**Noted**】: Force alignment result to replace the Kmeans predicted results
 
@@ -67,14 +94,26 @@ python3 gen_ctc_force_align.py
 If you choose this for the resource of cluster ID, you need to update the `run.sh`: make the `**cluster_pred=False**`
 
 ### Train Models for Fluency Scorer
+
+#### For SpeechOcean762
 - version for no cluster_id feature:
-```
+```bash
 ./noclu_run.sh
 ```
 - version with cluster_id feature:
-```
+```bash
 ./run.sh
 ```
+
+#### For ezai-championship2023
+```bash
+./run_ezai-champ2023.sh
+```
+
+This will train on the full dataset (using "test" split for both training and validation).
+
+#### For Other Datasets
+Modify `run_ezai-champ2023.sh` and change the dataset parameters.
 
 ## Results
 ### SpeechOcean762

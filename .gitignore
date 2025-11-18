@@ -9,3 +9,5 @@ prep_data/libspeech_acoustic_feat.py
 tsne.ipynb
 
 .env
+
+__pycache__/

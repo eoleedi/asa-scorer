@@ -7,3 +7,5 @@ datasets==4.2.0
 numpy
 tqdm
 matplotlib
+soundfile
+scipy
