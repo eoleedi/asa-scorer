@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from models import ClusterScorer, NonClusterScorer, TransformerScorer
+from src.models import ClusterScorer, NonClusterScorer, TransformerScorer
 from speech_datasets import create_dataset, custom_collate_fn
 
 aspect_name_map = {

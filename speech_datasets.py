@@ -39,16 +39,24 @@ class BaseFluencyDataset(Dataset, ABC):
         aspects: List[str],
         kmeans_model: Optional[Any] = None,
         device: str = "cpu",
+        proxy_targets_path: Optional[str] = None,
     ):
         """
         Args:
             aspects: List of aspect names to use (e.g., ["fluency", "prosodic"])
             kmeans_model: Pre-trained kmeans model for clustering (optional)
             device: Device to use for feature extraction
+            proxy_targets_path: Path to proxy targets pickle file
         """
         self.aspects = aspects
         self.kmeans_model = kmeans_model
         self.device = device
+        self.proxy_targets = None
+
+        if proxy_targets_path and os.path.exists(proxy_targets_path):
+            print(f"Loading proxy targets from {proxy_targets_path}")
+            with open(proxy_targets_path, "rb") as f:
+                self.proxy_targets = pickle.load(f)
 
         # Standard aspect mapping (0-indexed)
         self.aspect_map = {
@@ -67,7 +75,7 @@ class BaseFluencyDataset(Dataset, ABC):
     @abstractmethod
     def __getitem__(
         self, idx: int
-    ) -> Tuple[str, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[str, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[Any]]:
         """
         Get a sample from the dataset.
 
@@ -76,6 +84,7 @@ class BaseFluencyDataset(Dataset, ABC):
             labels: torch.Tensor of shape (num_aspects,), normalized to [0, 1]
             features: torch.Tensor of shape (seq_len, feature_dim)
             cluster_indices: torch.Tensor of shape (seq_len,) or None
+            proxy_target: Dict or None
         """
         ...
 
@@ -134,6 +143,7 @@ class SO762Dataset(BaseFluencyDataset):
         aspects: List[str],
         kmeans_model: Optional[Any] = None,
         device: str = "cpu",
+        proxy_targets_path: Optional[str] = None,
     ):
         """
         Args:
@@ -142,34 +152,56 @@ class SO762Dataset(BaseFluencyDataset):
             aspects: List of aspect names to use
             kmeans_model: Pre-trained kmeans model for clustering (optional)
             device: Device to use
+            proxy_targets_path: Path to proxy targets file
         """
-        super().__init__(aspects, kmeans_model, device)
+        super().__init__(aspects, kmeans_model, device, proxy_targets_path)
 
         self.data_dir = data_dir
         self.split = split
-
-        # Load audio paths
-        wav_scp_path = os.path.join(data_dir, split, "wav.scp")
-        paths = np.loadtxt(wav_scp_path, delimiter="\t", dtype=str)
-        self.paths = [path.split("\t")[-1] if "\t" in path else path for path in paths]
 
         # Determine dataset type prefix
         dataset_type = "tr" if split == "train" else "te"
 
         # Load labels
-        label_path = f"data/{dataset_type}_label_utt.npy"
+        label_path = os.path.join(data_dir, f"{dataset_type}_label_utt.npy")
+        if not os.path.exists(label_path):
+            # Fallback to old path for backward compatibility or if data is in root data/
+            label_path = f"data/{dataset_type}_label_utt.npy"
+
         labels = np.load(label_path)
         self.labels = torch.tensor(labels, dtype=torch.float32)
         self.labels = self._normalize_labels(self.labels)
 
         # Load pre-extracted features
-        feats_path = f"data/{dataset_type}_feats.pkl"
+        feats_path = os.path.join(data_dir, f"{dataset_type}_feats.pkl")
+        if not os.path.exists(feats_path):
+            feats_path = f"data/{dataset_type}_feats.pkl"
+
         with open(feats_path, "rb") as f:
             self.feats = pickle.load(f)
 
+        # Load audio paths
+        wav_scp_path = os.path.join(data_dir, split, "wav.scp")
+        if os.path.exists(wav_scp_path):
+            paths = np.loadtxt(wav_scp_path, delimiter="\t", dtype=str)
+            self.paths = [
+                path.split("\t")[-1] if "\t" in path else path for path in paths
+            ]
+        else:
+            # If wav.scp doesn't exist, use keys from feats
+            print(
+                f"Warning: {wav_scp_path} not found. Using keys from features dictionary as paths."
+            )
+            # Do NOT sort keys, as dictionary insertion order (Python 3.7+) likely preserves
+            # the order from the original wav.scp used to generate the features and labels.
+            self.paths = list(self.feats.keys())
+
         # Load cluster indices if available
         self.cluster_indices = None
-        cluster_path = f"data/{dataset_type}_cluster_index.pkl"
+        cluster_path = os.path.join(data_dir, f"{dataset_type}_cluster_index.pkl")
+        if not os.path.exists(cluster_path):
+            cluster_path = f"data/{dataset_type}_cluster_index.pkl"
+
         if os.path.exists(cluster_path):
             with open(cluster_path, "rb") as f:
                 self.cluster_indices = pickle.load(f)
@@ -182,7 +214,7 @@ class SO762Dataset(BaseFluencyDataset):
 
     def __getitem__(
         self, idx: int
-    ) -> Tuple[str, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[str, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[Any]]:
         audio_path = self.paths[idx]
 
         # Extract labels for requested aspects
@@ -199,7 +231,12 @@ class SO762Dataset(BaseFluencyDataset):
         if self.cluster_indices is not None:
             cluster_idx = self.cluster_indices[audio_path]
 
-        return audio_path, labels, features, cluster_idx
+        # Get proxy target
+        proxy_target = None
+        if self.proxy_targets is not None and audio_path in self.proxy_targets:
+            proxy_target = self.proxy_targets[audio_path]
+
+        return audio_path, labels, features, cluster_idx, proxy_target
 
 
 class HuggingFaceDataset(BaseFluencyDataset):
@@ -221,6 +258,7 @@ class HuggingFaceDataset(BaseFluencyDataset):
         device: str = "cpu",
         max_duration_sec: float = 30.0,
         cache_dir: Optional[str] = None,
+        proxy_targets_path: Optional[str] = None,
     ):
         """
         Args:
@@ -231,8 +269,9 @@ class HuggingFaceDataset(BaseFluencyDataset):
             device: Device to use for feature extraction
             max_duration_sec: Maximum audio duration in seconds (longer samples will be truncated)
             cache_dir: Directory to cache the dataset
+            proxy_targets_path: Path to proxy targets file
         """
-        super().__init__(aspects, kmeans_model, device)
+        super().__init__(aspects, kmeans_model, device, proxy_targets_path)
 
         self.dataset_name = dataset_name
         self.split = split
@@ -321,7 +360,7 @@ class HuggingFaceDataset(BaseFluencyDataset):
 
     def __getitem__(
         self, idx: int
-    ) -> Tuple[str, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[str, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[Any]]:
         audio_id = self.audio_ids[idx]
         labels = self.labels[idx]
         features = self.feats[idx]
@@ -330,7 +369,12 @@ class HuggingFaceDataset(BaseFluencyDataset):
         if len(self.cluster_indices) > 0:
             cluster_idx = self.cluster_indices[idx]
 
-        return audio_id, labels, features, cluster_idx
+        # Get proxy target
+        proxy_target = None
+        if self.proxy_targets is not None and audio_id in self.proxy_targets:
+            proxy_target = self.proxy_targets[audio_id]
+
+        return audio_id, labels, features, cluster_idx, proxy_target
 
 
 def custom_collate_fn(batch: List[Tuple]) -> Tuple:
@@ -338,19 +382,20 @@ def custom_collate_fn(batch: List[Tuple]) -> Tuple:
     Custom collate function for batching variable-length sequences.
 
     Args:
-        batch: List of tuples (audio_path, labels, features, cluster_indices)
+        batch: List of tuples (audio_path, labels, features, cluster_indices, proxy_targets)
 
     Returns:
         paths: List of audio paths
         labels: torch.Tensor of shape (batch_size, num_aspects)
         features: torch.Tensor of shape (batch_size, max_seq_len, feature_dim) - padded
         cluster_indices: torch.Tensor of shape (batch_size, max_seq_len) - padded with -1
+        proxy_targets: List of proxy targets (dicts) or None
     """
     # Sort by feature length (descending) for efficient packing
     batch = sorted(batch, key=lambda x: x[2].shape[0], reverse=True)
 
     # Extract components
-    paths, labels, feats, cluster_idxs = zip(*batch)
+    paths, labels, feats, cluster_idxs, proxy_targets = zip(*batch)
 
     # Stack labels
     labels_tensor = torch.stack(labels)
@@ -366,7 +411,13 @@ def custom_collate_fn(batch: List[Tuple]) -> Tuple:
     else:
         padded_cluster_idxs = None
 
-    return list(paths), labels_tensor, padded_feats, padded_cluster_idxs
+    return (
+        list(paths),
+        labels_tensor,
+        padded_feats,
+        padded_cluster_idxs,
+        list(proxy_targets),
+    )
 
 
 def create_dataset(
@@ -389,10 +440,13 @@ def create_dataset(
         **kwargs: Additional dataset-specific arguments
             For SO762: data_dir (default: "data/speechocean762")
             For HuggingFace: dataset_name, max_duration_sec, cache_dir
+            proxy_targets_path: Path to proxy targets file
 
     Returns:
         Dataset instance
     """
+    proxy_targets_path = kwargs.get("proxy_targets_path", None)
+
     if dataset_type.lower() == "so762" or dataset_type.lower() == "speechocean762":
         data_dir = kwargs.get("data_dir", "data/speechocean762")
         return SO762Dataset(
@@ -401,6 +455,7 @@ def create_dataset(
             aspects=aspects,
             kmeans_model=kmeans_model,
             device=device,
+            proxy_targets_path=proxy_targets_path,
         )
     else:
         # Assume it's a HuggingFace dataset name
@@ -412,4 +467,5 @@ def create_dataset(
             device=device,
             max_duration_sec=kwargs.get("max_duration_sec", 30.0),
             cache_dir=kwargs.get("cache_dir", None),
+            proxy_targets_path=proxy_targets_path,
         )

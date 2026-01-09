@@ -22,7 +22,20 @@ model(){
   NonClusterScorer
   ClusterScorer
   TransformerScorer
+  ProxyScorer
 }
+
+# Option to enable proxy loss
+use_proxy_loss=false
+# use_proxy_loss=true
+
+if [ "$use_proxy_loss" = true ]; then
+    model=ProxyScorer
+    extra_args="--use_proxy_loss --proxy_targets_dir data/proxy_targets"
+    tag=${tag}_proxy
+else
+    extra_args=""
+fi
 
 aspect="fluency prosodic"
 tag_aspect=${aspect// /+}
@@ -45,7 +58,8 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
             --model ${model} --n-epochs ${num_epochs} --use_device ${use_device} --gpu_index ${gpu_index} \
             --depth ${depth} --num_heads ${num_heads} --dataset ${dataset} \
             --train_split ${train_split} --test_split ${test_split} \
-			--seed "${seed_list[$repeat]}" --aspect ${aspect}
+			--seed "${seed_list[$repeat]}" --aspect ${aspect} \
+            ${extra_args}
     done
     python3 collect_summary.py --exp-dir $exp_dir
     exit 0

@@ -4,8 +4,8 @@ exp/*
 !exp/README.md
 data/*
 !data/README.md
-prep_data/LibriSpeech
-prep_data/libspeech_acoustic_feat.py
+src/prep_data/LibriSpeech
+src/prep_data/libspeech_acoustic_feat.py
 tsne.ipynb
 
 .env

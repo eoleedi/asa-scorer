@@ -10,17 +10,32 @@
 
 set -euo pipefail
 
-# source .env
+# Get the directory of this script and the project root
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Assuming structure: root/src/prep_data/run.sh
+PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
+# Change to project root
+cd "$PROJECT_ROOT"
+export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
+
+# Source .env if it exists
+if [ -f ".env" ]; then
+    source ".env"
+fi
+
+PREP_DIR="src/prep_data"
 DATASET_NAME="eoleedi/ezai-championship2023"
 TRAIN_SPLIT="train"
 TEST_SPLIT="train"
-OUTPUT_DIR="../data/ezai-championship2023/ezai-champ2023"
-FEAT_DIR="../data/ezai-championship2023"
+OUTPUT_DIR="data/ezai-championship2023/ezai-champ2023"
+FEAT_DIR="data/ezai-championship2023"
+
+echo "Running preparation scripts from project root: $PROJECT_ROOT"
 
 # default stages
 STAGE=1
-STOP_STAGE=4
+STOP_STAGE=5
 
 usage() {
     echo "Usage: $0 [--stage N] [--stop-stage M]"
@@ -81,7 +96,7 @@ should_run() {
 if should_run 1; then
     echo ""
     echo "Step 1: Exporting dataset..."
-    python3 prep_hf_dataset.py ${DATASET_NAME} \
+    python3 ${PREP_DIR}/prep_hf_dataset.py ${DATASET_NAME} \
         --output_dir ${OUTPUT_DIR} \
         --train_split ${TRAIN_SPLIT} \
         --test_split ${TEST_SPLIT} \
@@ -94,7 +109,7 @@ fi
 if should_run 2; then
     echo ""
     echo "Step 2: Extracting HuBERT features..."
-    python3 gen_seq_acoustic_feat.py ${OUTPUT_DIR} --feat_dir ${FEAT_DIR}
+    python3 ${PREP_DIR}/gen_seq_acoustic_feat.py ${OUTPUT_DIR} --feat_dir ${FEAT_DIR}
 else
     echo "Skipping Step 2 (extract features)"
 fi
@@ -103,7 +118,7 @@ fi
 if should_run 3; then
     echo ""
     echo "Step 3: Training k-means (50 clusters)..."
-    python3 train_kmeans.py ${OUTPUT_DIR} --feat_dir ${FEAT_DIR}
+    python3 ${PREP_DIR}/train_kmeans.py ${OUTPUT_DIR} --feat_dir ${FEAT_DIR}
 else
     echo "Skipping Step 3 (train k-means)"
 fi
@@ -112,9 +127,21 @@ fi
 if should_run 4; then
     echo ""
     echo "Step 4: Evaluating clustering quality..."
-    python3 kmeans_metric.py ${OUTPUT_DIR} --feat_dir ${FEAT_DIR}
+    python3 ${PREP_DIR}/kmeans_metric.py ${OUTPUT_DIR} --feat_dir ${FEAT_DIR}
 else
     echo "Skipping Step 4 (evaluate clustering)"
+fi
+
+# Stage 5: Generate Proxy Targets
+if should_run 5; then
+    echo ""
+    echo "Step 5: Generating Proxy Targets..."
+    python3 ${PREP_DIR}/gen_proxy_targets.py \
+        --dataset_name ${DATASET_NAME} \
+        --split ${TRAIN_SPLIT} \
+        --output_dir "data/proxy_targets"
+else
+    echo "Skipping Step 5 (generate proxy targets)"
 fi
 
 echo ""
@@ -125,7 +152,8 @@ echo "Generated files (if corresponding stages were run):"
 echo "  - Labels: ${FEAT_DIR}/tr_label_utt.npy, ${FEAT_DIR}/te_label_utt.npy"
 echo "  - Features: ${FEAT_DIR}/tr_feats.pkl, ${FEAT_DIR}/te_feats.pkl"
 echo "  - Clusters: ${FEAT_DIR}/tr_cluster_index.pkl, ${FEAT_DIR}/te_cluster_index.pkl"
-echo "  - K-means model: ../exp/kmeans/kmeans_model.joblib"
+echo "  - K-means model: exp/kmeans/kmeans_model.joblib"
+echo "  - Proxy Targets: data/proxy_targets/"
 echo ""
 echo "Next step: Run training with run_ezai-champ2023.sh"
 echo "=========================================="
