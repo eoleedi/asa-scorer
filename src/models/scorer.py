@@ -1,39 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
-
-
-# Attention pooling
-class AttentionPooling(nn.Module):
-    def __init__(self, in_dim):
-        super().__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(in_dim, 1),
-            nn.GELU(),
-        )
-
-    def forward(self, x, attn, mask):
-        w = self.attention(attn).float()
-        w[mask == 0] = float("-inf")
-        w = torch.softmax(w, 1)
-        x = torch.sum(w * x, dim=1)
-        return x
-
-
-def mean_pooling(feature_tensor, mask):
-    mean = torch.sum(feature_tensor * mask, 1) / torch.clamp(mask.sum(1), min=1e-9)
-
-    return mean
-
-
-def create_mask(feature_embedding, seq_lengths):
-    device = feature_embedding.device
-    B, T, D = feature_embedding.shape
-    range_tensor_for_mask = torch.arange(T).expand(B, T).to(device)
-    mask = range_tensor_for_mask < seq_lengths.unsqueeze(1)
-    mask = mask.unsqueeze(2).expand(B, T, D)
-
-    return mask
+from src.models.util import mean_pooling, create_mask
 
 
 # adapt: tanh -> GELU
