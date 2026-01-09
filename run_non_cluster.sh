@@ -37,7 +37,7 @@ seed_list=(0 11 22 33 44)
 if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
     for repeat in "${repeat_list[@]}"; do
         mkdir -p $exp_dir/${repeat}
-        python3 train.py \
+        python3 src/train.py \
             --lr ${lr} \
             --exp-dir ${exp_dir}/${repeat} \
             --batch_size ${batch_size} --hidden_dim ${hidden_dim} \
@@ -46,6 +46,6 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
 			--seed "${seed_list[$repeat]}" --aspect ${aspect} \
             ${extra_args}
     done
-    python3 collect_summary.py --exp-dir $exp_dir
+    python3 src/collect_summary.py --exp-dir $exp_dir
     exit 0
 fi
