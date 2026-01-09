@@ -22,20 +22,7 @@ model(){
   NonClusterScorer
   ClusterScorer
   TransformerScorer
-  ProxyScorer
 }
-
-# Option to enable proxy loss
-use_proxy_loss=false
-# use_proxy_loss=true
-
-if [ "$use_proxy_loss" = true ]; then
-    model=ProxyScorer
-    extra_args="--use_proxy_loss --proxy_targets_dir data/proxy_targets"
-    tag=${tag}_proxy
-else
-    extra_args=""
-fi
 
 aspect="fluency prosodic"
 tag_aspect=${aspect// /+}

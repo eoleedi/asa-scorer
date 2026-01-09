@@ -70,18 +70,9 @@ echo ""
 echo "Step 4: Evaluating k-means clustering..."
 python3 ${PREP_DIR}/kmeans_metric.py ${OUTPUT_DIR} --feat_dir ${FEAT_DIR}
 
-# Step 5: Generate Proxy Targets
-echo ""
-echo "Step 5: Generating Proxy Targets..."
-python3 ${PREP_DIR}/gen_proxy_targets.py \
-    --dataset_name ${DATASET_NAME} \
-    --split ${TRAIN_SPLIT} \
-    --output_dir "data/proxy_targets"
-
 echo ""
 echo "=========================================="
 echo "Data preparation complete!"
 echo "Features saved to: ${FEAT_DIR}"
 echo "K-means model saved to: exp/kmeans/"
-echo "Proxy Targets saved to: data/proxy_targets/"
 echo "=========================================="

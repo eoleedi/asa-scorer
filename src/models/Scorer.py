@@ -75,11 +75,6 @@ class BiLSTMScorer(nn.Module):
         return score
 
 
-class MultiProxyProsodyScorer(nn.Module):
-    """
-    A model for score prediction on prosody aspect with multiple proxy tasks."""
-
-
 class NonClusterScorer(nn.Module):
     """
     A model for score prediction on multiple aspects.

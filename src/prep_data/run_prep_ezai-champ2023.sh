@@ -132,18 +132,6 @@ else
     echo "Skipping Step 4 (evaluate clustering)"
 fi
 
-# Stage 5: Generate Proxy Targets
-if should_run 5; then
-    echo ""
-    echo "Step 5: Generating Proxy Targets..."
-    python3 ${PREP_DIR}/gen_proxy_targets.py \
-        --dataset_name ${DATASET_NAME} \
-        --split ${TRAIN_SPLIT} \
-        --output_dir "data/proxy_targets"
-else
-    echo "Skipping Step 5 (generate proxy targets)"
-fi
-
 echo ""
 echo "=========================================="
 echo "✓ Data preparation complete!"
@@ -153,7 +141,6 @@ echo "  - Labels: ${FEAT_DIR}/tr_label_utt.npy, ${FEAT_DIR}/te_label_utt.npy"
 echo "  - Features: ${FEAT_DIR}/tr_feats.pkl, ${FEAT_DIR}/te_feats.pkl"
 echo "  - Clusters: ${FEAT_DIR}/tr_cluster_index.pkl, ${FEAT_DIR}/te_cluster_index.pkl"
 echo "  - K-means model: exp/kmeans/kmeans_model.joblib"
-echo "  - Proxy Targets: data/proxy_targets/"
 echo ""
 echo "Next step: Run training with run_ezai-champ2023.sh"
 echo "=========================================="

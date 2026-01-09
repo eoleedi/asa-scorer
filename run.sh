@@ -21,19 +21,7 @@ model(){
   NonClusterScorer
   ClusterScorer
   TransformerScorer
-  ProxyScorer
 }
-# Option to enable proxy loss
-use_proxy_loss=true
-# use_proxy_loss=true
-
-if [ "$use_proxy_loss" = true ]; then
-    model=ProxyScorer
-    extra_args="--proxy_targets_path data/speechocean762/train_proxy_targets.pkl"
-    tag=${tag}_proxy
-else
-    extra_args=""
-fi
 
 
 aspect="prosodic"
