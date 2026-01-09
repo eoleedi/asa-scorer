@@ -14,7 +14,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from src.models import ClusterScorer, NonClusterScorer, TransformerScorer
-from speech_datasets import create_dataset, custom_collate_fn
+from src.speech_datasets import create_dataset, custom_collate_fn
 
 aspect_name_map = {
     "acc": "accuracy",
@@ -106,12 +106,25 @@ def set_arg(parser):
         help="Dataset split to use for testing (default: test)",
     )
     parser.add_argument(
-        "--load_cluster_index", type=bool, default=False, help="load cluster index (deprecated - auto-detected)"
+        "--load_cluster_index",
+        type=bool,
+        default=False,
+        help="load cluster index (deprecated - auto-detected)",
     )
-    parser.add_argument("--kmeans_model", type=str, default="exp/kmeans/so762/kmeans_model.joblib", help="kmeans model path")
+    parser.add_argument(
+        "--kmeans_model",
+        type=str,
+        default="exp/kmeans/so762/kmeans_model.joblib",
+        help="kmeans model path",
+    )
     parser.add_argument("--seed", type=int, default=66)
     parser.add_argument("--aspect", nargs="+", default=["fluency"])
-    parser.add_argument("--max_duration_sec", type=float, default=30.0, help="Max audio duration in seconds (for HuggingFace datasets)")
+    parser.add_argument(
+        "--max_duration_sec",
+        type=float,
+        default=30.0,
+        help="Max audio duration in seconds (for HuggingFace datasets)",
+    )
     return parser
 
 
@@ -568,7 +581,7 @@ def main():
     print(f"Training aspects: {args.aspect}")
 
     print("Preparing datasets...")
-    
+
     # Load kmeans model if using cluster-based models
     kmeans_model = None
     if args.model == "ClusterScorer" or args.model == "TransformerScorer":
@@ -577,14 +590,14 @@ def main():
             print(f"Loaded kmeans model from: {args.kmeans_model}")
         else:
             print(f"Warning: kmeans model not found at {args.kmeans_model}")
-    
+
     # Determine device for feature extraction
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # Create datasets using the factory function
     print(f"Dataset type: {args.dataset_type}")
     print(f"Train split: {args.train_split}, Test split: {args.test_split}")
-    
+
     tr_dataset = create_dataset(
         dataset_type=args.dataset_type,
         split=args.train_split,
@@ -595,7 +608,7 @@ def main():
         dataset_name=args.dataset_type,  # For HuggingFace datasets
         max_duration_sec=args.max_duration_sec,
     )
-    
+
     te_dataset = create_dataset(
         dataset_type=args.dataset_type,
         split=args.test_split,
@@ -606,7 +619,7 @@ def main():
         dataset_name=args.dataset_type,  # For HuggingFace datasets
         max_duration_sec=args.max_duration_sec,
     )
-    
+
     # Create data loaders
     tr_dataloader = DataLoader(
         tr_dataset,
@@ -614,18 +627,18 @@ def main():
         shuffle=True,
         collate_fn=custom_collate_fn,
     )
-    
+
     te_dataloader = DataLoader(
         te_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=custom_collate_fn,
     )
-    
+
     # Get input dimension from first sample
     first_sample = tr_dataset[0]
     input_dim = first_sample[2].shape[1]  # features are at index 2
-    
+
     print(f"Dataset prepared. Input dimension: {input_dim}")
     print(f"Training samples: {len(tr_dataset)}, Test samples: {len(te_dataset)}")
 
