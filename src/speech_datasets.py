@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Standardized dataset module for fluency scoring.
+Standardized dataset module for scoring.
 
 This module provides a unified interface for different datasets:
 - All datasets return: (audio_path, labels, features, cluster_indices)
@@ -23,9 +23,9 @@ from datasets import load_dataset as hf_load_dataset
 from tqdm import tqdm
 
 
-class BaseFluencyDataset(Dataset, ABC):
+class BaseDataset(Dataset, ABC):
     """
-    Base class for all fluency scoring datasets.
+    Base class for all scoring datasets.
 
     Standard interface:
         - __getitem__ returns: (audio_path, labels, features, cluster_indices)
@@ -116,7 +116,7 @@ class BaseFluencyDataset(Dataset, ABC):
         return cluster_ids
 
 
-class SO762Dataset(BaseFluencyDataset):
+class SO762Dataset(BaseDataset):
     """
     Dataset for SpeechOcean762 data.
 
@@ -223,7 +223,7 @@ class SO762Dataset(BaseFluencyDataset):
         return audio_path, labels, features, cluster_idx
 
 
-class HuggingFaceDataset(BaseFluencyDataset):
+class HuggingFaceDataset(BaseDataset):
     """
     Dataset for loading from HuggingFace datasets.
 
@@ -402,7 +402,7 @@ def create_dataset(
     kmeans_model: Optional[Any] = None,
     device: str = "cpu",
     **kwargs,
-) -> BaseFluencyDataset:
+) -> BaseDataset:
     """
     Factory function to create the appropriate dataset.
 

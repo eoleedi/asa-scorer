@@ -20,7 +20,7 @@ def load_file(path):
     return file
 
 
-class fluDataset(Dataset):
+class CustomDataset(Dataset):
     def __init__(self, types):
         paths = load_file(f"{args.SO762_dir}/{types}/wav.scp")
         for i in range(paths.shape[0]):
@@ -45,9 +45,9 @@ class fluDataset(Dataset):
 
 batch_size = 1
 
-tr_dataset = fluDataset("train")
+tr_dataset = CustomDataset("train")
 tr_dataloader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=False)
-te_dataset = fluDataset("test")
+te_dataset = CustomDataset("test")
 te_dataloader = DataLoader(te_dataset, batch_size=batch_size, shuffle=False)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -68,7 +68,7 @@ def extract_feature(dataLoader, dataset_type):
             # 1. Relative to SO762_dir/train or SO762_dir/test (e.g., "wav/file.wav" or "relative/path.wav")
             # 2. Absolute path
             # We need to check which dataset_type we're in to build the correct path
-            
+
             if os.path.isabs(path):
                 # Path is absolute
                 audio_path = path
@@ -80,7 +80,7 @@ def extract_feature(dataLoader, dataset_type):
                 # dataset_type is 'train' or 'test'
                 split_name = "train" if dataset_type == "tr" else "test"
                 audio_path = os.path.join(args.SO762_dir, split_name, path)
-            
+
             waveform, sample_rate = torchaudio.load(audio_path)
             audio_list.append(waveform)
 

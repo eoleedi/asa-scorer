@@ -87,11 +87,11 @@ def valid_predictions(audio_output, target):
             tgt = target[:, i].numpy()
 
         aspect_mse = np.mean((pred - tgt) ** 2)
-        
+
         # Pearson correlation
         corr_matrix = np.corrcoef(pred, tgt)
         aspect_pcc = corr_matrix[0, 1].item()
-        
+
         # Spearman correlation
         aspect_spc, _ = spearmanr(pred, tgt)
 
@@ -113,7 +113,7 @@ def main():
     # Load the test data
     data = load_dataset(args.dataset, split="train")
 
-    # Load the fluency model
+    # Load the model
     if args.model == "NonClusterScorer":
         audio_model = NonClusterScorer(
             input_dim=1024, embed_dim=32, scorers=args.aspect
@@ -176,7 +176,7 @@ def main():
         audio = item["audio"]
         target = [item[aspect] for aspect in args.aspect]
         target = torch.tensor(target, dtype=torch.float32).unsqueeze(0)
-        # Apply same scaling as used during training (from train.py fluDataset)
+        # Apply same scaling as used during training (from train.py BaseDataset)
         target = target * 0.2
 
         # waveform array from datasets audio feature
@@ -227,13 +227,17 @@ def main():
     all_preds = torch.cat([p[0] for p in predictions], dim=0)
     all_targets = torch.cat([p[1] for p in predictions], dim=0)
 
-    avg_mse, avg_pcc, avg_spc, mse_list, pcc_list, spc_list = valid_predictions(all_preds, all_targets)
+    avg_mse, avg_pcc, avg_spc, mse_list, pcc_list, spc_list = valid_predictions(
+        all_preds, all_targets
+    )
 
     for i, aspect in enumerate(args.aspect):
         print(
             f"Aspect: {aspect} - MSE: {mse_list[i]:.4f}, PCC: {pcc_list[i]:.4f}, SPC: {spc_list[i]:.4f}"
         )
-    print(f"Average MSE: {avg_mse:.4f}, Average PCC: {avg_pcc:.4f}, Average SPC: {avg_spc:.4f}")
+    print(
+        f"Average MSE: {avg_mse:.4f}, Average PCC: {avg_pcc:.4f}, Average SPC: {avg_spc:.4f}"
+    )
 
 
 if __name__ == "__main__":

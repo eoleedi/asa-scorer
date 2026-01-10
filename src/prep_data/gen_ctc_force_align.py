@@ -39,7 +39,7 @@ def load_file(path):
     return file
 
 
-class fluDataset(Dataset):
+class CustomDataset(Dataset):
     def __init__(self, types):
         paths = load_file(f"../speechocean762/{types}/wav.scp")
         texts = load_file(f"../speechocean762/{types}/text")
@@ -123,8 +123,8 @@ def main(
         device = torch.device("cpu")
 
     batch_size = 1
-    tr_dataset = fluDataset("train")
-    te_dataset = fluDataset("test")
+    tr_dataset = CustomDataset("train")
+    te_dataset = CustomDataset("test")
     tr_dataloader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=False)
     te_dataloader = DataLoader(te_dataset, batch_size=batch_size, shuffle=False)
 

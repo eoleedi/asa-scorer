@@ -36,7 +36,7 @@ def load_file(path):
     return file
 
 
-class fluDataset(Dataset):
+class CustomDataset(Dataset):
     def __init__(self, set):
         paths = load_file(f"speechocean762/{set}/wav.scp")
         for i in range(paths.shape[0]):
@@ -116,9 +116,9 @@ if __name__ == "__main__":
     print("Preparing datasets")
 
     batch_size = 8
-    tr_dataset = fluDataset("train")
+    tr_dataset = CustomDataset("train")
     tr_dataloader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=False)
-    te_dataset = fluDataset("test")
+    te_dataset = CustomDataset("test")
     te_dataloader = DataLoader(te_dataset, batch_size=batch_size, shuffle=False)
     print("Done.")
 

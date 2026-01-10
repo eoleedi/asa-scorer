@@ -449,7 +449,7 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
     audio_model = audio_model.to(device)
     audio_model.eval()
 
-    A_flu, A_flu_target = [], []
+    A_pred, A_target = [], []
     with torch.no_grad():
         for _, data in enumerate(val_loader):
             if len(data) == 3:
@@ -473,37 +473,37 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
             if labels.dim() == 1:
                 labels = labels.unsqueeze(1)
 
-            A_flu.append(score)
-            A_flu_target.append(labels)
+            A_pred.append(score)
+            A_target.append(labels)
 
-        A_flu, A_flu_target = torch.cat(A_flu), torch.cat(A_flu_target)
+        A_pred, A_target = torch.cat(A_pred), torch.cat(A_target)
 
         # get the scores
-        flu_mse, flu_corr, mse_list, corr_list = valid_flu(A_flu, A_flu_target)
+        avg_mse, avg_corr, mse_list, corr_list = valid_scores(A_pred, A_target)
 
-        if flu_mse < best_mse:
+        if avg_mse < best_mse:
+            # Generate aspect name for logging
+            aspect_str = "+".join(args.aspect)
             print(
-                "\033[94mnew best flu mse {:.3f}, now saving predictions.\033[0m".format(
-                    flu_mse
-                )
+                f"\033[94mnew best {aspect_str} mse {avg_mse:.3f}, now saving predictions.\033[0m"
             )
             print(args.exp_dir)
             # create the directory
             if os.path.exists(args.exp_dir + "/preds") == False:
                 os.mkdir(args.exp_dir + "/preds")
 
-            # saving the phn target, only do once
-            if os.path.exists(args.exp_dir + "/preds/phn_target.npy") == False:
-                np.save(args.exp_dir + "/preds/flu_target.npy", A_flu_target)
+            # saving the target, only do once
+            if os.path.exists(args.exp_dir + "/preds/target.npy") == False:
+                np.save(args.exp_dir + "/preds/target.npy", A_target)
 
-            np.save(args.exp_dir + "/preds/flu_pred.npy", A_flu)
+            np.save(args.exp_dir + "/preds/pred.npy", A_pred)
 
-    return flu_mse, flu_corr, mse_list, corr_list
+    return avg_mse, avg_corr, mse_list, corr_list
 
 
-def valid_flu(audio_output, target):
+def valid_scores(audio_output, target):
     """
-    Validate fluency predictions, supporting multiple aspects.
+    Validate score predictions, supporting multiple aspects.
 
     Args:
         audio_output: (batch_size, num_aspects) or (batch_size, 1)
@@ -538,10 +538,10 @@ def valid_flu(audio_output, target):
         corr_list.append(aspect_corr)
 
     # Return average MSE and correlation across all aspects, plus individual lists
-    valid_token_mse = np.mean(mse_list)
-    corr = np.mean(corr_list)
+    avg_mse = np.mean(mse_list)
+    avg_corr = np.mean(corr_list)
 
-    return valid_token_mse, corr, mse_list, corr_list
+    return avg_mse, avg_corr, mse_list, corr_list
 
 
 def main():

@@ -14,9 +14,11 @@ def load_file(path):
     file = np.loadtxt(path, delimiter=",", dtype=str)
     return file
 
+
 def load_audio(path):
     waveform, sr = torchaudio.load(path)
     return {"array": waveform.numpy().squeeze(), "sampling_rate": sr}
+
 
 def get_arguments():
     parser = ArgumentParser()
@@ -37,7 +39,7 @@ def get_arguments():
     parser.add_argument(
         "--aspect",
         nargs="+",
-        default=["fluency", "prosodic"], # order matters
+        default=["fluency", "prosodic"],  # order matters
         help="aspect to evaluate (e.g., fluency)",
     )
     # Sliding window options (ms). window_ms=0 disables sliding (use full utterance)
@@ -57,11 +59,19 @@ def get_arguments():
     return args
 
 
-def inference(audio, audio_model, kmeans_model, feature_extractor, window_ms, hop_ms, device="cuda"):
+def inference(
+    audio,
+    audio_model,
+    kmeans_model,
+    feature_extractor,
+    window_ms,
+    hop_ms,
+    device="cuda",
+):
     """
     Run inference on a single audio file.
     audio: dict with keys 'array' (numpy array) and 'sampling_rate' (int)
-    model: loaded fluency scoring model
+    audio_model: loaded scoring model
     kmeans_model: loaded kmeans model
     feature_extractor: loaded HuBERT feature extractor
     Returns: prediction tensor of shape (1, num_aspects), where the score ranges from 0 to 2.
@@ -118,9 +128,7 @@ def inference(audio, audio_model, kmeans_model, feature_extractor, window_ms, ho
             flat_features = features.reshape(-1, D).cpu().numpy()
             cluster_ids_np = kmeans_model.predict(flat_features)
             cluster_ids = (
-                torch.tensor(cluster_ids_np, dtype=torch.long)
-                .reshape(B, T)
-                .to(device)
+                torch.tensor(cluster_ids_np, dtype=torch.long).reshape(B, T).to(device)
             )
             pred = audio_model(features, cluster_ids)
             # pred: (1, num_aspects) or (1,) -> ensure 2D
@@ -185,7 +193,6 @@ def main():
         device,
     )
     print("Prediction(0-2):", prediction.cpu().numpy())
-    
 
 
 if __name__ == "__main__":
