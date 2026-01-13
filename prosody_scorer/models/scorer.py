@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
-from src.models.util import mean_pooling, create_mask
+from prosody_scorer.models.util import mean_pooling, create_mask
 
 
 # adapt: tanh -> GELU

@@ -1,48 +1,53 @@
-#!/usr/bin/env python3
-"""
-Export HuggingFace datasets to SO762-compatible format for prep pipeline.
-
-This script downloads a HuggingFace dataset and exports it to:
-- wav.scp files (maps utterance_id to audio file path)
-- Audio WAV files saved locally
-- Label files (same format as SO762)
-"""
+"""Stage 1: Export HuggingFace dataset to local format."""
 
 import os
-import argparse
-import json
 import numpy as np
 import soundfile as sf
 from datasets import load_dataset
+from pathlib import Path
+from typing import List, Optional, Tuple
 from tqdm import tqdm
 
+from ..utils.data_utils import save_json
 
-def export_hf_dataset(dataset_name, output_dir, train_split="train", test_split="test", aspects=None):
+
+def export_hf_dataset(
+    dataset_name: str,
+    output_dir: Path,
+    train_split: str = "train",
+    test_split: str = "test",
+    aspects: Optional[List[str]] = None,
+) -> Path:
     """
     Export HuggingFace dataset to SO762-compatible format.
     
     Args:
-        dataset_name: HuggingFace dataset identifier (e.g., "eoleedi/ezai-championship2023")
+        dataset_name: HuggingFace dataset identifier (e.g., "eoleedi/ezai-championship2023", "mispeech/speechocean762")
         output_dir: Directory to save exported files
         train_split: Name of training split
         test_split: Name of test split
         aspects: List of aspect names to extract (default: ["accuracy", "completeness", "fluency", "prosodic", "total"])
+    
+    Returns:
+        Path to output directory
     """
     if aspects is None:
         aspects = ["accuracy", "completeness", "fluency", "prosodic", "total"]
     
+    output_dir = Path(output_dir)
+    
     # Create output directories
-    os.makedirs(output_dir, exist_ok=True)
-    train_dir = os.path.join(output_dir, "train")
-    test_dir = os.path.join(output_dir, "test")
-    os.makedirs(train_dir, exist_ok=True)
-    os.makedirs(test_dir, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    train_dir = output_dir / "train"
+    test_dir = output_dir / "test"
+    train_dir.mkdir(exist_ok=True)
+    test_dir.mkdir(exist_ok=True)
     
     # Create wav directories
-    train_wav_dir = os.path.join(train_dir, "wav")
-    test_wav_dir = os.path.join(test_dir, "wav")
-    os.makedirs(train_wav_dir, exist_ok=True)
-    os.makedirs(test_wav_dir, exist_ok=True)
+    train_wav_dir = train_dir / "wav"
+    test_wav_dir = test_dir / "wav"
+    train_wav_dir.mkdir(exist_ok=True)
+    test_wav_dir.mkdir(exist_ok=True)
     
     print(f"Loading HuggingFace dataset: {dataset_name}")
     print(f"Train split: {train_split}, Test split: {test_split}")
@@ -51,22 +56,30 @@ def export_hf_dataset(dataset_name, output_dir, train_split="train", test_split=
     train_data = load_dataset(dataset_name, split=train_split)
     test_data = load_dataset(dataset_name, split=test_split)
     
+    # Detect dataset type and adjust processing
+    is_speechocean762 = "speechocean762" in dataset_name.lower()
+    
     # Export function
-    def export_split(data, split_name, split_dir, wav_dir):
-        wav_scp_path = os.path.join(split_dir, "wav.scp")
+    def export_split(data, split_name: str, split_dir: Path, wav_dir: Path) -> Tuple[np.ndarray, dict]:
+        """Export a single split of the dataset."""
+        wav_scp_path = split_dir / "wav.scp"
         labels = []
         utt2score = {}
         
         with open(wav_scp_path, "w") as wav_scp:
             for idx, item in enumerate(tqdm(data, desc=f"Exporting {split_name}")):
                 # Create utterance ID
-                utt_id = f"{split_name}_{idx:06d}"
+                if is_speechocean762 and "id" in item:
+                    # Use original ID from SpeechOcean762
+                    utt_id = str(item["id"])
+                else:
+                    utt_id = f"{split_name}_{idx:06d}"
                 
                 # Save audio file
                 audio = item["audio"]
                 array = audio["array"]
                 sr = int(audio["sampling_rate"])
-                wav_path = os.path.join(wav_dir, f"{utt_id}.wav")
+                wav_path = wav_dir / f"{utt_id}.wav"
                 sf.write(wav_path, array, sr)
                 
                 # Write to wav.scp (relative path from split_dir)
@@ -76,20 +89,32 @@ def export_hf_dataset(dataset_name, output_dir, train_split="train", test_split=
                 # Extract labels
                 label_row = []
                 score_dict = {}
-                for aspect in aspects:
-                    if aspect in item:
-                        value = float(item[aspect])
+                
+                # Handle SpeechOcean762 nested structure
+                if is_speechocean762 and "scores" in item:
+                    scores = item["scores"]
+                    for aspect in aspects:
+                        if aspect in scores:
+                            value = float(scores[aspect])
+                        else:
+                            value = 0.0
                         label_row.append(value)
                         score_dict[aspect] = value
-                    else:
-                        # If aspect doesn't exist in dataset, use 0
-                        label_row.append(0.0)
-                        score_dict[aspect] = 0.0
+                else:
+                    # Handle flat structure (ezai-championship2023, etc.)
+                    for aspect in aspects:
+                        if aspect in item:
+                            value = float(item[aspect])
+                            label_row.append(value)
+                            score_dict[aspect] = value
+                        else:
+                            # If aspect doesn't exist in dataset, use 0
+                            label_row.append(0.0)
+                            score_dict[aspect] = 0.0
                 
                 labels.append(label_row)
                 utt2score[utt_id] = score_dict
         
-        # Save labels as numpy array
         labels_array = np.array(labels)
         return labels_array, utt2score
     
@@ -98,16 +123,15 @@ def export_hf_dataset(dataset_name, output_dir, train_split="train", test_split=
     test_labels, test_utt2score = export_split(test_data, "test", test_dir, test_wav_dir)
     
     # Save labels to data directory (parent of output_dir)
-    data_dir = os.path.dirname(output_dir)
-    os.makedirs(data_dir, exist_ok=True)
-    np.save(os.path.join(data_dir, "tr_label_utt.npy"), train_labels)
-    np.save(os.path.join(data_dir, "te_label_utt.npy"), test_labels)
+    data_dir = output_dir.parent
+    data_dir.mkdir(parents=True, exist_ok=True)
+    np.save(data_dir / "tr_label_utt.npy", train_labels)
+    np.save(data_dir / "te_label_utt.npy", test_labels)
     
     # Save scores.json (combined for compatibility)
     all_utt2score = {**train_utt2score, **test_utt2score}
-    scores_json_path = os.path.join(output_dir, "scores.json")
-    with open(scores_json_path, "w") as f:
-        json.dump(all_utt2score, f, indent=2)
+    scores_json_path = output_dir / "scores.json"
+    save_json(all_utt2score, scores_json_path)
     
     print(f"\nExport complete!")
     print(f"  Train samples: {len(train_labels)}")
@@ -119,7 +143,9 @@ def export_hf_dataset(dataset_name, output_dir, train_split="train", test_split=
     return output_dir
 
 
-def main():
+if __name__ == "__main__":
+    import argparse
+    
     parser = argparse.ArgumentParser(
         description="Export HuggingFace dataset to SO762-compatible format"
     )
@@ -157,12 +183,8 @@ def main():
     
     export_hf_dataset(
         args.dataset,
-        args.output_dir,
+        Path(args.output_dir),
         args.train_split,
         args.test_split,
-        args.aspects
+        args.aspects,
     )
-
-
-if __name__ == "__main__":
-    main()

@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.models import ClusterScorer, NonClusterScorer, TransformerScorer
-from src.speech_datasets import create_dataset, custom_collate_fn
+from prosody_scorer.models import ClusterScorer, NonClusterScorer, TransformerScorer
+from prosody_scorer.speech_datasets import create_dataset, custom_collate_fn
 
 aspect_name_map = {
     "acc": "accuracy",

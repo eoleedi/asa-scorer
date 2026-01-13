@@ -56,34 +56,32 @@ Specifically, it produce something like the below with the flency and prosodic s
 ### The Input Features and Labels
 
 #### For SpeechOcean762 Dataset
-The input generation program are in `prep_data`.
-Just run the shell script in `prep_data`.
+
+Directly download and process from HuggingFace:
 ```bash
-cd prep_data
-./run.sh
+./scripts/prep_so762_hf.sh
 ```
 
 #### For ezai-championship2023 Dataset
 Use the dedicated preparation script:
 ```bash
-cd prep_data
-./run_prep_ezai-champ2023.sh
+./scripts/prep_ezai_champ2023.sh
 ```
 
 #### For Other HuggingFace Datasets
 ```bash
-cd prep_data
-./run_prep_hf.sh "dataset-name/dataset-id" "train_split" "test_split"
+./scripts/prep_hf_dataset.sh "dataset-name/dataset-id" "train_split" "test_split"
 ```
 
 **What these scripts do:**
-- The labels are fluency scores in speechocean762.
-- The acoustic features are extracted by **HuBert_Large**, where the dim is the value of 1024.
-- The feats and labels files are collected in `data`.
-- The cluster model is trained in `train_kmeans.py`, the model will be saved in `exp/kmeans`, which is used in fluency_scoring training later. 
-- `kmeans_metric.py` is used to take a look the performance of kmeans clustering.
+- Download dataset from HuggingFace (if using HF datasets)
+- Export to local format compatible with the training pipeline
+- Extract **HuBERT_Large** acoustic features (dim=1024)
+- Train K-means clustering model
+- Evaluate clustering quality
+- All outputs saved to `data/` and `exp/kmeans/`
 
-See [prep_data/README.md](prep_data/README.md) for detailed documentation.
+See [prosody_scorer/prep_data/README.md](prosody_scorer/prep_data/README.md) for detailed documentation.
 
 【**Noted**】: Force alignment result to replace the Kmeans predicted results
 

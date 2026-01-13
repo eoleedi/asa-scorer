@@ -34,8 +34,8 @@ repeat_list=(0 1 2 3 4)
 for repeat in "${repeat_list[@]}"
 do
   mkdir -p $exp_dir-${repeat}
-  python3 src/train.py --lr ${lr} --exp-dir ${exp_dir}-${repeat} \
+  python3 -m prosody_scorer.train --lr ${lr} --exp-dir ${exp_dir}-${repeat} \
   --batch_size ${batch_size} --hidden_dim ${hidden_dim} \
   --model ${model} --n-epochs ${num_epochs} --use_device ${use_device} --gpu_index ${gpu_index} \
-  --depth ${depth} --num_heads ${num_heads} --SO762_dir ${SO762_dir} --load_cluster_index ${load_cluster_index}
+  --depth ${depth} --num_heads ${num_heads} --load_cluster_index ${load_cluster_index}
 done
