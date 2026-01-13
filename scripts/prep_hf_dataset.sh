@@ -17,10 +17,6 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
-# Source .env if it exists
-if [ -f ".env" ]; then
-    source ".env"
-fi
 
 # Configuration
 DATASET_NAME=${1:-"eoleedi/ezai-championship2023"}

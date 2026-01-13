@@ -12,11 +12,6 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
-# Source .env if it exists
-if [ -f ".env" ]; then
-    source ".env"
-fi
-
 # Dataset configuration
 DATASET_NAME="eoleedi/ezai-championship2023"
 TRAIN_SPLIT="train"
