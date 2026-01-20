@@ -120,7 +120,12 @@ def main():
         default=14,
         help="HuBERT layer to extract (default: 14)",
     )
-    
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="hubert_large",
+        help="Model name for feature extraction (default: hubert_large)",
+    )
     # Stage 2: K-Means training
     parser.add_argument(
         "--n_clusters",
@@ -221,6 +226,7 @@ def main():
             split="train",
             device=args.device,
             layer=args.layer,
+            model_name=args.model_name,
         )
         
         print("\nExtracting TEST features...")
@@ -230,6 +236,7 @@ def main():
             split="test",
             device=args.device,
             layer=args.layer,
+            model_name=args.model_name,
         )
     
     # Stage 2: Train K-Means

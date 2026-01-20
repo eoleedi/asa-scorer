@@ -65,10 +65,17 @@ def train_kmeans_model(
     for paths, _ in dataloader:
         for path in paths:
             feats = saved_tensor_dict[path]
+            # Flatten to (seq_len, feat_dim) if needed
+            if feats.dim() == 3:
+                # Shape: (batch=1, seq_len, feat_dim) -> (seq_len, feat_dim)
+                feats = feats.squeeze(0)
             extract_feat_list.append(feats.cpu())
     
-    extract_feat_tensor = torch.concat(extract_feat_list, dim=0)
+    # Concatenate all frames from all utterances
+    # Each element in extract_feat_list is (seq_len, feat_dim), lengths may vary
+    extract_feat_tensor = torch.cat(extract_feat_list, dim=0)
     print(f"Feature tensor shape: {extract_feat_tensor.shape}")
+    print(f"Total frames: {extract_feat_tensor.shape[0]}, Feature dimension: {extract_feat_tensor.shape[1]}")
     
     # Suppress sklearn warnings
     warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -137,6 +144,11 @@ def _generate_cluster_predictions(
     for paths, _ in dataloader:
         for path in paths:
             feat_tensor = saved_tensor_dict[path]
+            # Flatten to (seq_len, feat_dim) if needed
+            if feat_tensor.dim() == 3:
+                # Shape: (batch=1, seq_len, feat_dim) -> (seq_len, feat_dim)
+                feat_tensor = feat_tensor.squeeze(0)
+            
             cluster_pred = cluster.predict(feat_tensor.cpu().numpy())
             cluster_pred_tensor = torch.tensor(cluster_pred)
             

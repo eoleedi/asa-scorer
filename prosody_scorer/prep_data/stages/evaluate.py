@@ -93,9 +93,13 @@ def _evaluate_split(
     for paths, _ in dataloader:
         for path in paths:
             feats = saved_tensor_dict[path]
-            extract_feat_list.append(feats)
+            # Flatten to (seq_len, feat_dim) if needed
+            if feats.dim() == 3:
+                # Shape: (batch=1, seq_len, feat_dim) -> (seq_len, feat_dim)
+                feats = feats.squeeze(0)
+            extract_feat_list.append(feats.cpu())
     
-    extract_feat_tensor = torch.concat(extract_feat_list, dim=0)
+    extract_feat_tensor = torch.cat(extract_feat_list, dim=0)
     print(f"Feature tensor shape: {extract_feat_tensor.shape}")
     
     # Convert to numpy and predict

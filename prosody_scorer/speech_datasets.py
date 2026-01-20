@@ -214,6 +214,10 @@ class SO762Dataset(BaseDataset):
 
         # Get features
         features = self.feats[audio_path]
+        
+        # Ensure features are 2D: (seq_len, feat_dim)
+        if features.dim() == 3:
+            features = features.squeeze(0)
 
         # Get cluster indices
         cluster_idx = None
