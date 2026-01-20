@@ -91,14 +91,18 @@ class ClusterScorer(nn.Module):
     The main model for fluency score prediction with using cluster.
     """
 
-    def __init__(self, input_dim, embed_dim, scorers: list, clustering_dim=6):
+    def __init__(
+        self, input_dim, embed_dim, scorers: list, clustering_dim=6, num_clusters=50
+    ):
         super().__init__()
         self.preprocessing = nn.Sequential(
             nn.Linear(input_dim, embed_dim),
             nn.LayerNorm(embed_dim),
             nn.Tanh(),
         )
-        self.cluster_embed = nn.Embedding(50 + 1, clustering_dim, padding_idx=0)
+        self.cluster_embed = nn.Embedding(
+            num_clusters + 1, clustering_dim, padding_idx=0
+        )
         self.scorers = nn.ModuleDict(
             {
                 aspect: BiLSTMScorer(embed_dim + clustering_dim, embed_dim, 2)

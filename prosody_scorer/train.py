@@ -117,6 +117,12 @@ def set_arg(parser):
         default="exp/kmeans/so762/kmeans_model.joblib",
         help="kmeans model path",
     )
+    parser.add_argument(
+        "--num_clusters",
+        type=int,
+        default=50,
+        help="number of clusters for ClusterScorer",
+    )
     parser.add_argument("--seed", type=int, default=66)
     parser.add_argument("--aspect", nargs="+", default=["fluency"])
     parser.add_argument(
@@ -649,6 +655,7 @@ def main():
             input_dim=input_dim,
             embed_dim=args.hidden_dim,
             clustering_dim=6,
+            num_clusters=args.num_clusters,
             scorers=args.aspect,
         )
     elif args.model == "NonClusterScorer":
