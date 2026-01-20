@@ -242,8 +242,6 @@ def gen_result_header(aspect_names):
 
 
 def train(audio_model, train_loader, test_loader, args):
-    gpu_index = 0
-    torch.cuda.set_device(gpu_index)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("running on " + str(device))
 
@@ -449,8 +447,6 @@ def train(audio_model, train_loader, test_loader, args):
 
 
 def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
-    gpu_index = 0
-    torch.cuda.set_device(gpu_index)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     audio_model = audio_model.to(device)
     audio_model.eval()

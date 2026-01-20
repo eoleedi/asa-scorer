@@ -7,12 +7,15 @@ lr=1e-3
 batch_size=25
 hidden_dim=32
 num_epochs=50
-gpu_index=0
+gpu_index=0  # GPU to use (via CUDA_VISIBLE_DEVICES)
 # use_device='cpu'
 use_device='cuda'
 depth=3
 num_heads=1
 dataset="eoleedi/ezai-championship2023"
+
+# Set GPU device
+export CUDA_VISIBLE_DEVICES=${gpu_index}
 train_split="train"  # Use test split for training (full dataset)
 test_split="train"   # Use test split for testing (same as training)
 
@@ -41,7 +44,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
             --lr ${lr} \
             --exp-dir ${exp_dir}/${repeat} \
             --batch_size ${batch_size} --hidden_dim ${hidden_dim} \
-            --model ${model} --n-epochs ${num_epochs} --use_device ${use_device} --gpu_index ${gpu_index} \
+            --model ${model} --n-epochs ${num_epochs} --use_device ${use_device} \
             --depth ${depth} --num_heads ${num_heads} --dataset ${dataset} \
             --train_split ${train_split} --test_split ${test_split} \
 			--seed "${seed_list[$repeat]}" --aspect ${aspect} \

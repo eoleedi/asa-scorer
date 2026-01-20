@@ -8,7 +8,7 @@ lr=1e-3
 batch_size=25
 hidden_dim=32
 num_epochs=50
-gpu_index=0
+gpu_index=0  # GPU to use (via CUDA_VISIBLE_DEVICES)
 # use_device='cpu'
 use_device='cuda'
 depth=3
@@ -16,6 +16,9 @@ num_heads=1
 SO762_dir="data/speechocean762_emotion2vec_layer6"
 load_cluster_index=True
 dataset_type='so762'
+
+# Set GPU device
+export CUDA_VISIBLE_DEVICES=${gpu_index}
 model=NonClusterScorer
 model(){
   NonClusterScorer
@@ -44,7 +47,7 @@ if [ $stage -le 1 ] && [ $stop_stage -ge 1 ]; then
             --data_dir ${SO762_dir} \
             --exp-dir ${exp_dir}/${repeat} \
             --batch_size ${batch_size} --hidden_dim ${hidden_dim} \
-            --model ${model} --n-epochs ${num_epochs} --use_device ${use_device} --gpu_index ${gpu_index} \
+            --model ${model} --n-epochs ${num_epochs} --use_device ${use_device} \
             --num_clusters ${num_clusters} \
             --depth ${depth} --num_heads ${num_heads} --dataset_type ${dataset_type} --load_cluster_index ${load_cluster_index} \
 			--seed "${seed_list[$repeat]}" --aspect ${aspect} \
