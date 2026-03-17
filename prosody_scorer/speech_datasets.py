@@ -134,6 +134,7 @@ class SO762Dataset(BaseDataset):
         aspects: List[str],
         kmeans_model: Optional[Any] = None,
         device: str = "cpu",
+        feature_type: str = "ssl",
     ):
         """
         Args:
@@ -147,6 +148,7 @@ class SO762Dataset(BaseDataset):
 
         self.data_dir = data_dir
         self.split = split
+        self.feature_type = feature_type.lower()
 
         # Determine dataset type prefix
         dataset_type = "tr" if split == "train" else "te"
@@ -162,20 +164,32 @@ class SO762Dataset(BaseDataset):
         self.labels = self._normalize_labels(self.labels)
 
         # Load pre-extracted features
-        feats_path = os.path.join(data_dir, f"{dataset_type}_feats.pkl")
+        if self.feature_type == "handcrafted":
+            feats_filename = f"{dataset_type}_handcrafted_feats.pkl"
+        else:
+            feats_filename = f"{dataset_type}_feats.pkl"
+
+        feats_path = os.path.join(data_dir, feats_filename)
         if not os.path.exists(feats_path):
-            feats_path = f"data/{dataset_type}_feats.pkl"
+            feats_path = f"data/{feats_filename}"
 
         with open(feats_path, "rb") as f:
             self.feats = pickle.load(f)
 
         # Load audio paths
         wav_scp_path = os.path.join(data_dir, split, "wav.scp")
+        if not os.path.exists(wav_scp_path):
+            nested_wav_scp_path = os.path.join(data_dir, "so762", split, "wav.scp")
+            if os.path.exists(nested_wav_scp_path):
+                wav_scp_path = nested_wav_scp_path
         if os.path.exists(wav_scp_path):
-            paths = np.loadtxt(wav_scp_path, delimiter="\t", dtype=str)
-            self.paths = [
-                path.split("\t")[-1] if "\t" in path else path for path in paths
-            ]
+            self.paths = []
+            with open(wav_scp_path) as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) != 2:
+                        continue
+                    self.paths.append(parts[1])
         else:
             # If wav.scp doesn't exist, use keys from feats
             print(
@@ -194,6 +208,9 @@ class SO762Dataset(BaseDataset):
         if os.path.exists(cluster_path):
             with open(cluster_path, "rb") as f:
                 self.cluster_indices = pickle.load(f)
+
+        if self.feature_type == "handcrafted":
+            self.cluster_indices = None
 
         # Extract aspect indices
         self.aspect_indices = [self.aspect_map[aspect] for aspect in aspects]
@@ -214,7 +231,7 @@ class SO762Dataset(BaseDataset):
 
         # Get features
         features = self.feats[audio_path]
-        
+
         # Ensure features are 2D: (seq_len, feat_dim)
         if features.dim() == 3:
             features = features.squeeze(0)
@@ -431,6 +448,7 @@ def create_dataset(
             aspects=aspects,
             kmeans_model=kmeans_model,
             device=device,
+            feature_type=kwargs.get("feature_type", "ssl"),
         )
     else:
         # Assume it's a HuggingFace dataset name

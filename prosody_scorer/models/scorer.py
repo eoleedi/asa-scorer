@@ -86,6 +86,53 @@ class NonClusterScorer(nn.Module):
         return pred
 
 
+class SimpleRegressionScorer(nn.Module):
+    """Simple BLSTM regressor for sequence features."""
+
+    def __init__(self, input_dim: int, hidden_dim: int, scorers: list):
+        super().__init__()
+        self.num_outputs = len(scorers)
+        self.preprocessing = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+        )
+        self.blstm = nn.LSTM(
+            hidden_dim,
+            hidden_dim,
+            num_layers=1,
+            bias=True,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.regressor = nn.Sequential(
+            nn.LayerNorm(hidden_dim * 2),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, self.num_outputs),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        device = x.device
+        nonzero_mask = x.abs().sum(dim=2) != 0
+        seq_lengths = nonzero_mask.sum(dim=1).to(device).clamp(min=1)
+
+        x = self.preprocessing(x)
+        mask = create_mask(x, seq_lengths)
+        x = x * mask
+
+        packed = pack_padded_sequence(
+            x, seq_lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        output, _ = self.blstm(packed)
+        output, _ = pad_packed_sequence(output, batch_first=True)
+        blstm_mask = create_mask(output, seq_lengths)
+        pooled = mean_pooling(output, blstm_mask)
+
+        pred = self.regressor(pooled)
+        return pred if self.num_outputs > 1 else pred[:, :1]
+
+
 class ClusterScorer(nn.Module):
     """
     The main model for fluency score prediction with using cluster.
@@ -151,17 +198,21 @@ class TransformerScorer(nn.Module):
         activation="gelu",
         norm_first=True,
         clustering_dim=6,
+        hidden_dim=32,
+        scorers=None,
     ):
-        # TODO: Support multiple aspects
         super().__init__()
         self.input_dim = input_dim
         self.dropout_prob = dropout_prob
-        self.hidden_dim = 32
+        self.hidden_dim = hidden_dim
+        self.clustering_dim = clustering_dim
+        self.num_outputs = len(scorers) if scorers is not None else 1
+        self.model_dim = self.hidden_dim + self.clustering_dim
         self.proj_layer = nn.Linear(input_dim, self.hidden_dim)
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.hidden_dim + clustering_dim,
+            d_model=self.model_dim,
             nhead=num_heads,
-            dim_feedforward=(self.hidden_dim + clustering_dim) * 4,
+            dim_feedforward=self.model_dim * 4,
             dropout=dropout_prob,
             activation=activation,
             batch_first=True,
@@ -172,24 +223,35 @@ class TransformerScorer(nn.Module):
         )
 
         self.mlp_head_utt1 = nn.Sequential(
-            nn.LayerNorm(self.hidden_dim), nn.Linear(self.hidden_dim, 1)
+            nn.LayerNorm(self.model_dim),
+            nn.Linear(self.model_dim, self.hidden_dim),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim, self.num_outputs),
         )
 
-    def forward(self, x, cluster_idx):
+    def forward(self, x, cluster_idx=None):
+        nonzero_mask = x.abs().sum(dim=2) != 0
         x = self.proj_layer(x)
-        x = torch.cat([x, cluster_idx], dim=2)
-        mask = self.create_mask(x)
-        x = self.transformer_encoder(x, src_key_padding_mask=mask)
-        x = self.mean_pooling(x, padding_value=0.0)
-        x = self.mlp_head_utt1(x)
-        return x
 
-    def mean_pooling(self, feature_tensor: torch.Tensor, padding_value: float = 0.0):
-        mask = feature_tensor != padding_value
-        count = torch.sum(mask, axis=1)
-        count = torch.clamp(count, min=1e-9)  # Avoid division by zero
-        feature_tensor = torch.where(mask, feature_tensor, 0)
-        mean = torch.sum(feature_tensor, axis=1) / count
+        if cluster_idx is not None:
+            if cluster_idx.dim() == 2:
+                cluster_idx = cluster_idx.unsqueeze(-1)
+            cluster_idx = cluster_idx.float()
+            x = torch.cat([x, cluster_idx], dim=2)
+        elif self.clustering_dim > 0:
+            zeros = x.new_zeros(x.size(0), x.size(1), self.clustering_dim)
+            x = torch.cat([x, zeros], dim=2)
+
+        mask = ~nonzero_mask
+        x = self.transformer_encoder(x, src_key_padding_mask=mask)
+        x = self.mean_pooling(x, nonzero_mask)
+        x = self.mlp_head_utt1(x)
+        return x if self.num_outputs > 1 else x[:, :1]
+
+    def mean_pooling(self, feature_tensor: torch.Tensor, valid_mask: torch.Tensor):
+        mask = valid_mask.unsqueeze(-1).float()
+        count = torch.clamp(mask.sum(dim=1), min=1e-9)
+        mean = (feature_tensor * mask).sum(dim=1) / count
         return mean
 
     def create_mask(self, x: torch.Tensor, padding_value: float = 0.0):

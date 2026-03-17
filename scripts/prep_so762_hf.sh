@@ -32,10 +32,10 @@ echo "Model directory:     ${MODEL_DIR}"
 echo "=========================================="
 
 # Run full pipeline from stage 0 (export) to stage 3 (evaluate)
-python3 -m prosody_scorer.prep_data.pipeline "${OUTPUT_DIR}" \
+CUDA_VISIBLE_DEVICES=0 python3 -m prosody_scorer.prep_data.pipeline "${OUTPUT_DIR}" \
     --feat_dir "${FEAT_DIR}" \
     --output_dir "${MODEL_DIR}" \
-    --stage 0 \
+    --stage 1 \
     --stop_stage 3 \
     --hf_dataset "${HF_DATASET}" \
     --train_split "${TRAIN_SPLIT}" \

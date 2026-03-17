@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union, Dict
 from tqdm import tqdm
 import numpy as np
+import promonet
 
 from ..utils.data_utils import (
     load_wav_scp,
@@ -15,7 +16,7 @@ from ..utils.data_utils import (
     resolve_audio_path,
 )
 
-from funasr import AutoModel as FunASRAutoModel
+# from funasr import AutoModel as FunASRAutoModel
 
 
 class Emotion2VecExtractor:
@@ -29,7 +30,9 @@ class Emotion2VecExtractor:
         layer=-1,
     ):
         self.model = FunASRAutoModel(
-            model=model_id, hub="hf", device=device  # Use huggingface hub
+            model=model_id,
+            hub="hf",
+            device=device,  # Use huggingface hub
         )
         self.granularity = granularity
         self.device = device
@@ -104,6 +107,38 @@ class Emotion2VecExtractor:
         raise ValueError("Failed to extract features from emotion2vec")
 
 
+# class HandcraftedFeatureExtractor:
+#     """Extract Pitch, SPPGs, and Loudness and periodicity from promonet"""
+
+#     def __init__(self, device="cuda"):
+#         self.device = device
+
+#     def extract_features(self, waveform, sample_rate=16000):
+#         """Extract handcrafted features from waveform
+
+#         Args:
+#             waveform: numpy array of audio samples or torch tensor
+#             sample_rate: sample rate of the audio
+
+#         Returns:
+#             features: tensor of shape (seq_len, feature_dim)
+#         """
+#         # Convert waveform to numpy if it's a tensor
+#         if isinstance(waveform, torch.Tensor):
+#             waveform = waveform.cpu().numpy()
+
+#         # Extract features using promonet
+#         features = promonet.extract(
+#             waveform,
+#             sr=sample_rate,
+#             features=["pitch", "sppg", "loudness", "periodicity"],
+#         )
+
+#         # Convert to tensor
+#         feature_tensor = torch.tensor(features, dtype=torch.float32).to(self.device)
+
+
+#         return feature_tensor, None
 def extract_features(
     dataset_dir: Union[str, Path],
     feat_dir: Union[str, Path],
@@ -163,10 +198,12 @@ def extract_features(
     # Extract features
     print(f"Extracting features for {split} split...")
     extract_feat_list = []
+    handcrafted_feat_list = []
 
     for paths, _ in tqdm(dataloader, desc=f"Extracting {split} features"):
         audio_list = []
 
+        audio_sample_rate = None
         for path in paths:
             # Resolve audio path
             audio_path = resolve_audio_path(path, dataset_dir, split)
@@ -174,6 +211,7 @@ def extract_features(
             # Load waveform
             waveform, sample_rate = torchaudio.load(audio_path)
             audio_list.append(waveform)
+            audio_sample_rate = sample_rate  # Assume all audio has the same sample rate
 
         # Pad to max length in batch
         max_length = max(waveform.size(1) for waveform in audio_list)
@@ -208,6 +246,44 @@ def extract_features(
 
             extract_feat_list.append(my_feature.cpu())
 
+        # Extract handcrafted features using promonet
+        # Move audio back to CPU for promonet processing
+        audio_cpu = audio.cpu()
+
+        # Extract handcrafted features for each sample in the batch
+        batch_handcrafted_features = []
+        for i in range(audio_cpu.size(0)):
+            single_audio = audio_cpu[i].numpy()
+
+            # Extract features using promonet
+            handcrafted_dict = promonet.preprocess.from_audio(
+                single_audio,
+                sample_rate=audio_sample_rate,
+                features=["loudness", "pitch", "periodicity", "ppg"],
+            )
+
+            # Stack features in a fixed order
+            # Each feature has shape (seq_len,), we need to stack them to (seq_len, num_features)
+            feature_list = []
+            for feat_name in ["loudness", "pitch", "periodicity", "ppg"]:
+                feat_data = handcrafted_dict[feat_name]
+                # Convert to tensor if it's not already
+                if isinstance(feat_data, np.ndarray):
+                    feat_data = torch.tensor(feat_data, dtype=torch.float32)
+                # Ensure feat_data is 2D (seq_len, feat_dim)
+                if feat_data.ndim == 1:
+                    feat_data = feat_data.unsqueeze(-1)
+                feature_list.append(feat_data)
+
+            # Concatenate all features along the feature dimension
+            handcrafted_feature = torch.cat(
+                feature_list, dim=-1
+            )  # loudness D=8, pitch D=1, periodicity D=1, ppg D=40 -> total D=50
+            # The shape of handcrafted_feature is (seq_len, 50)
+            batch_handcrafted_features.append(handcrafted_feature)
+
+        handcrafted_feat_list.append(batch_handcrafted_features)
+
     print("Creating feature dictionary...")
 
     # Create dictionary mapping paths to features
@@ -222,6 +298,28 @@ def extract_features(
     save_pickle(saved_tensor_dict, output_file)
 
     print(f"Saved {len(saved_tensor_dict)} feature tensors to {output_file}")
+
+    # Create dictionary mapping paths to handcrafted features
+    print("Creating handcrafted feature dictionary...")
+    handcrafted_dict = {}
+    for j, (paths, _) in enumerate(dataloader):
+        for i, path in enumerate(paths):
+            if path not in handcrafted_dict:
+                handcrafted_dict[path] = handcrafted_feat_list[j][i]
+
+    # Save handcrafted features
+    handcrafted_output_file = feat_dir / f"{prefix}_handcrafted_feats.pkl"
+    save_pickle(handcrafted_dict, handcrafted_output_file)
+
+    print(
+        f"Saved {len(handcrafted_dict)} handcrafted feature tensors to {handcrafted_output_file}"
+    )
+
+    # Print handcrafted feature shape info
+    if len(handcrafted_feat_list) > 0 and len(handcrafted_feat_list[0]) > 0:
+        first_handcrafted = handcrafted_feat_list[0][0]
+        print(f"First handcrafted feature shape: {first_handcrafted.shape}")
+        print(f"Handcrafted feature dimension: {first_handcrafted.shape[-1]}")
 
     # Print shape info
     # Note: Cannot concatenate all features due to variable sequence lengths

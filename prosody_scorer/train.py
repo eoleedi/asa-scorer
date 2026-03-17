@@ -13,7 +13,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from prosody_scorer.models import ClusterScorer, NonClusterScorer, TransformerScorer
+from prosody_scorer.models import (
+    ClusterScorer,
+    NonClusterScorer,
+    SimpleRegressionScorer,
+    TransformerScorer,
+)
 from prosody_scorer.speech_datasets import create_dataset, custom_collate_fn
 
 aspect_name_map = {
@@ -92,6 +97,13 @@ def set_arg(parser):
         type=str,
         default="data/speechocean762",
         help="Directory of the dataset (for SO762 dataset)",
+    )
+    parser.add_argument(
+        "--feature_type",
+        type=str,
+        default="ssl",
+        choices=["ssl", "handcrafted"],
+        help="Feature source to use for SO762 datasets",
     )
     parser.add_argument(
         "--train_split",
@@ -260,7 +272,9 @@ def train(audio_model, train_loader, test_loader, args):
 
     audio_model = audio_model.to(device)
 
-    if args.model == "ClusterScorer" or args.model == "TransformerScorer":
+    if args.model == "ClusterScorer" or (
+        args.model == "TransformerScorer" and args.feature_type != "handcrafted"
+    ):
         kmeans_model = joblib.load(args.kmeans_model)
     else:
         kmeans_model = None
@@ -302,14 +316,12 @@ def train(audio_model, train_loader, test_loader, args):
     while epoch < args.n_epochs:
         audio_model.train()
         for _, data in enumerate(train_loader):
-            if len(data) == 3:
-                audio_paths, utt_label, feats = data
-            elif len(data) == 4:
-                audio_paths, utt_label, feats, indexs = data
-                cluster_index = indexs + 1
-                cluster_index = cluster_index.to(device)
-            else:
+            if len(data) != 4:
                 raise ValueError("Unexpected number of elements in data")
+            audio_paths, utt_label, feats, indexs = data
+            cluster_index = None
+            if indexs is not None:
+                cluster_index = (indexs + 1).to(device)
 
             # warmup
             warm_up_step = 100
@@ -323,13 +335,17 @@ def train(audio_model, train_loader, test_loader, args):
                     )
                 )
 
-            cluster_index = indexs + 1
-            cluster_index = cluster_index.to(device)
-
             feats = feats.to(device)
-            if args.model == "ClusterScorer" or args.model == "TransformerScorer":
+            if args.model == "ClusterScorer":
+                if cluster_index is None:
+                    raise ValueError(f"Model {args.model} requires cluster indices.")
                 pred = audio_model(feats, cluster_index)
-            elif args.model == "NonClusterScorer":
+            elif args.model == "TransformerScorer":
+                pred = audio_model(feats, cluster_index)
+            elif (
+                args.model == "NonClusterScorer"
+                or args.model == "SimpleRegressionScorer"
+            ):
                 pred = audio_model(feats)
             else:
                 raise ValueError(f"Model {args.model} not recognized.")
@@ -454,19 +470,24 @@ def validate(audio_model, val_loader, args, best_mse, kmeans_model=None):
     A_pred, A_target = [], []
     with torch.no_grad():
         for _, data in enumerate(val_loader):
-            if len(data) == 3:
-                audio_paths, utt_label, feats = data
-            elif len(data) == 4:
-                audio_paths, utt_label, feats, indexs = data
-                cluster_index = indexs + 1
-                cluster_index = cluster_index.to(device)
-            else:
+            if len(data) != 4:
                 raise ValueError("Unexpected number of elements in data")
+            audio_paths, utt_label, feats, indexs = data
+            cluster_index = None
+            if indexs is not None:
+                cluster_index = (indexs + 1).to(device)
 
             feats = feats.to(device)
-            if args.model == "ClusterScorer" or args.model == "TransformerScorer":
+            if args.model == "ClusterScorer":
+                if cluster_index is None:
+                    raise ValueError(f"Model {args.model} requires cluster indices.")
                 score = audio_model(feats, cluster_index)
-            elif args.model == "NonClusterScorer":
+            elif args.model == "TransformerScorer":
+                score = audio_model(feats, cluster_index)
+            elif (
+                args.model == "NonClusterScorer"
+                or args.model == "SimpleRegressionScorer"
+            ):
                 score = audio_model(feats)
 
             score = score.to("cpu").detach()
@@ -586,7 +607,9 @@ def main():
 
     # Load kmeans model if using cluster-based models
     kmeans_model = None
-    if args.model == "ClusterScorer" or args.model == "TransformerScorer":
+    if args.model == "ClusterScorer" or (
+        args.model == "TransformerScorer" and args.feature_type != "handcrafted"
+    ):
         if os.path.exists(args.kmeans_model):
             kmeans_model = joblib.load(args.kmeans_model)
             print(f"Loaded kmeans model from: {args.kmeans_model}")
@@ -607,6 +630,7 @@ def main():
         kmeans_model=kmeans_model,
         device=device,
         data_dir=args.data_dir,
+        feature_type=args.feature_type,
         dataset_name=args.dataset_type,  # For HuggingFace datasets
         max_duration_sec=args.max_duration_sec,
     )
@@ -618,6 +642,7 @@ def main():
         kmeans_model=kmeans_model,
         device=device,
         data_dir=args.data_dir,
+        feature_type=args.feature_type,
         dataset_name=args.dataset_type,  # For HuggingFace datasets
         max_duration_sec=args.max_duration_sec,
     )
@@ -661,6 +686,13 @@ def main():
             embed_dim=args.hidden_dim,
             scorers=args.aspect,
         )
+    elif args.model == "SimpleRegressionScorer":
+        print("Training SimpleRegressionScorer model")
+        audio_model = SimpleRegressionScorer(
+            input_dim=input_dim,
+            hidden_dim=args.hidden_dim,
+            scorers=args.aspect,
+        )
     elif args.model == "TransformerScorer":
         print("Training TransformerScorer model")
         audio_model = TransformerScorer(
@@ -668,6 +700,9 @@ def main():
             dropout_prob=args.dropout_prob,
             num_heads=args.num_heads,
             depth=args.depth,
+            hidden_dim=args.hidden_dim,
+            clustering_dim=0 if args.feature_type == "handcrafted" else 6,
+            scorers=args.aspect,
         )
     else:
         raise ValueError(f"Unknown model type: {args.model}")

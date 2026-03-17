@@ -31,6 +31,47 @@ No manual download required - datasets are automatically fetched from HuggingFac
     pip install -r requirements.txt
     ```
 
+### Building `torbi` for Unsupported PyTorch Versions
+
+The PyPI release of `torbi` only ships prebuilt binaries up to PyTorch 2.8.
+If you are using PyTorch 2.9 (or any other version not covered), you must build
+the native extension yourself and drop it into the installed package.
+
+**Prerequisites:** CUDA toolkit matching your `torch+cuXXX` build (e.g. CUDA 12.8 for `cu128`), and `uv`.
+
+```bash
+# 1. Clone torbi source
+git clone https://github.com/maxrmorrison/torbi.git ~/torbi
+cd ~/torbi
+
+# 2. Create an isolated build environment with the exact torch version you need
+uv venv --python 3.11
+uv pip install torch==2.9.0 torchaudio==2.9.0 \
+    --extra-index-url https://download.pytorch.org/whl/cu128
+uv pip install build "setuptools<70" numpy ninja
+
+# 3. Build the native extension (.so)
+#    Adjust TORCH_CUDA_ARCH_LIST to match your GPU compute capability
+export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.7;8.9;9.0"
+FORCE_CUDA=1 .venv/bin/python -m build --wheel --no-isolation
+rm -rf build
+USE_CUDA=1 .venv/bin/python build_ext_standalone.py
+#    The compiled library will be at: build/_C.pt29cu128.abi3.so
+
+# 4. Copy the .so into the project's torbi installation
+TORBI_PKG=$(python -c "import torbi, os; print(os.path.dirname(torbi.__file__))")
+cp build/_C.pt29cu128.abi3.so "$TORBI_PKG/"
+```
+
+Verify the fix:
+```bash
+python -c "import torbi; print('torbi OK')"
+```
+
+> **Note:** Repeat step 3–4 whenever you upgrade PyTorch to a version that has
+> no prebuilt binary on PyPI. Substitute the version strings (e.g. `pt29cu128`)
+> accordingly.
+
 ## Inference
 1. Download the pretrained model (audio and kmeans model)
     https://drive.google.com/drive/folders/1439B6_JRJbmr_zB2PWBSYHRwJDbxGDrP?usp=sharing
