@@ -11,6 +11,7 @@ This module provides a unified interface for different datasets:
 
 import os
 import pickle
+import re
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple, Any
 
@@ -166,6 +167,8 @@ class SO762Dataset(BaseDataset):
         # Load pre-extracted features
         if self.feature_type == "handcrafted":
             feats_filename = f"{dataset_type}_handcrafted_feats.pkl"
+        elif self.feature_type == "fdmpa":
+            feats_filename = f"{dataset_type}_feats.pkl"
         else:
             feats_filename = f"{dataset_type}_feats.pkl"
 
@@ -175,6 +178,15 @@ class SO762Dataset(BaseDataset):
 
         with open(feats_path, "rb") as f:
             self.feats = pickle.load(f)
+
+        self.hc_feats = None
+        if self.feature_type == "fdmpa":
+            hc_feats_filename = f"{dataset_type}_handcrafted_feats.pkl"
+            hc_feats_path = os.path.join(data_dir, hc_feats_filename)
+            if not os.path.exists(hc_feats_path):
+                hc_feats_path = f"data/{hc_feats_filename}"
+            with open(hc_feats_path, "rb") as f:
+                self.hc_feats = pickle.load(f)
 
         # Load audio paths
         wav_scp_path = os.path.join(data_dir, split, "wav.scp")
@@ -209,7 +221,7 @@ class SO762Dataset(BaseDataset):
             with open(cluster_path, "rb") as f:
                 self.cluster_indices = pickle.load(f)
 
-        if self.feature_type == "handcrafted":
+        if self.feature_type == "handcrafted" or self.feature_type == "fdmpa":
             self.cluster_indices = None
 
         # Extract aspect indices
@@ -218,9 +230,7 @@ class SO762Dataset(BaseDataset):
     def __len__(self) -> int:
         return len(self.paths)
 
-    def __getitem__(
-        self, idx: int
-    ) -> Tuple[str, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    def __getitem__(self, idx: int) -> Tuple:
         audio_path = self.paths[idx]
 
         # Extract labels for requested aspects
@@ -229,18 +239,23 @@ class SO762Dataset(BaseDataset):
         else:
             labels = self.labels[idx, self.aspect_indices]
 
-        # Get features
         features = self.feats[audio_path]
-
-        # Ensure features are 2D: (seq_len, feat_dim)
         if features.dim() == 3:
             features = features.squeeze(0)
+
+        hc_features = None
+        if self.feature_type == "fdmpa":
+            hc_features = self.hc_feats[audio_path]
+            if hc_features.dim() == 3:
+                hc_features = hc_features.squeeze(0)
 
         # Get cluster indices
         cluster_idx = None
         if self.cluster_indices is not None:
             cluster_idx = self.cluster_indices[audio_path]
 
+        if self.feature_type == "fdmpa":
+            return audio_path, labels, features, hc_features, cluster_idx
         return audio_path, labels, features, cluster_idx
 
 
@@ -263,6 +278,7 @@ class HuggingFaceDataset(BaseDataset):
         device: str = "cpu",
         max_duration_sec: float = 30.0,
         cache_dir: Optional[str] = None,
+        feature_type: str = "ssl",
     ):
         """
         Args:
@@ -273,12 +289,15 @@ class HuggingFaceDataset(BaseDataset):
             device: Device to use for feature extraction
             max_duration_sec: Maximum audio duration in seconds (longer samples will be truncated)
             cache_dir: Directory to cache the dataset
+            feature_type: Feature source to use ("ssl", "handcrafted", "fdmpa")
         """
         super().__init__(aspects, kmeans_model, device)
 
         self.dataset_name = dataset_name
         self.split = split
         self.max_duration_sec = max_duration_sec
+        self.feature_type = feature_type.lower()
+        self.cache_dir = cache_dir
 
         # Load dataset from HuggingFace
         print(f"Loading HuggingFace dataset: {dataset_name}, split: {split}")
@@ -292,19 +311,82 @@ class HuggingFaceDataset(BaseDataset):
         # Pre-extract features and cluster indices
         self._preprocess_dataset()
 
+    def _get_feature_cache_paths(self):
+        """Return cache file paths for pre-extracted features."""
+        dataset_leaf = self.dataset_name.split("/")[-1]
+        safe_dataset = re.sub(r"[^a-zA-Z0-9_.-]", "_", dataset_leaf)
+
+        if self.cache_dir:
+            base_dir = os.path.join(
+                self.cache_dir, "prosody_feature_cache", safe_dataset
+            )
+        else:
+            # Default local cache (keeps behavior close to SO762 pre-extracted feature files)
+            base_dir = os.path.join("data", safe_dataset)
+
+        os.makedirs(base_dir, exist_ok=True)
+
+        prefix = "tr" if self.split == "train" else "te"
+        ssl_cache_path = os.path.join(base_dir, f"{prefix}_feats.pkl")
+        hc_cache_path = os.path.join(base_dir, f"{prefix}_handcrafted_feats.pkl")
+        return ssl_cache_path, hc_cache_path
+
+    def _extract_handcrafted_features(self, wav: torch.Tensor, sr: int) -> torch.Tensor:
+        """Extract handcrafted features (loudness/pitch/periodicity/ppg) from waveform."""
+        import promonet
+
+        wav_np = wav.detach().cpu().numpy()
+        handcrafted_dict = promonet.preprocess.from_audio(
+            wav_np,
+            sample_rate=sr,
+            features=["loudness", "pitch", "periodicity", "ppg"],
+        )
+
+        feature_list = []
+        for feat_name in ["loudness", "pitch", "periodicity", "ppg"]:
+            feat_data = handcrafted_dict[feat_name]
+            if isinstance(feat_data, np.ndarray):
+                feat_data = torch.tensor(feat_data, dtype=torch.float32)
+            else:
+                feat_data = feat_data.to(dtype=torch.float32)
+
+            if feat_data.ndim == 1:
+                feat_data = feat_data.unsqueeze(-1)
+            feature_list.append(feat_data)
+
+        return torch.cat(feature_list, dim=-1)
+
     def _preprocess_dataset(self):
         """Pre-extract features and cluster indices to speed up training."""
         print(f"Pre-extracting features for {self.split} split...")
 
+        ssl_cache_path, hc_cache_path = self._get_feature_cache_paths()
+
         self.feats = []
+        self.hc_feats = []
         self.labels = []
         self.cluster_indices = []
         self.audio_ids = []
+
+        cached_ssl = None
+        cached_hc = None
+        if ssl_cache_path and os.path.exists(ssl_cache_path):
+            with open(ssl_cache_path, "rb") as f:
+                cached_ssl = pickle.load(f)
+            print(f"Loaded cached SSL features: {ssl_cache_path}")
+
+        if self.feature_type in ["handcrafted", "fdmpa"]:
+            if hc_cache_path and os.path.exists(hc_cache_path):
+                with open(hc_cache_path, "rb") as f:
+                    cached_hc = pickle.load(f)
+                print(f"Loaded cached handcrafted features: {hc_cache_path}")
 
         with torch.no_grad():
             for idx, item in enumerate(
                 tqdm(self.dataset, desc=f"Processing {self.split}")
             ):
+                audio_id = str(item.get("id", f"sample_{idx}"))
+
                 # Extract audio
                 audio = item["audio"]
                 array = audio["array"]
@@ -320,13 +402,20 @@ class HuggingFaceDataset(BaseDataset):
                 if wav.shape[0] > max_samples:
                     wav = wav[:max_samples]
 
-                wav_batch = wav.unsqueeze(0)
+                if cached_ssl is not None and audio_id in cached_ssl:
+                    features = cached_ssl[audio_id]
+                    if features.dim() == 2:
+                        features = features.unsqueeze(0)
+                else:
+                    wav_batch = wav.unsqueeze(0)
 
-                # Extract HuBERT features (14th layer)
-                audio_embedding, _ = self.feature_extractor.extract_features(wav_batch)
-                features = audio_embedding[14]
-                if features.dim() == 2:
-                    features = features.unsqueeze(0)
+                    # Extract HuBERT features (14th layer)
+                    audio_embedding, _ = self.feature_extractor.extract_features(
+                        wav_batch
+                    )
+                    features = audio_embedding[14]
+                    if features.dim() == 2:
+                        features = features.unsqueeze(0)
 
                 # Extract cluster indices if kmeans model provided
                 cluster_idx = None
@@ -337,6 +426,14 @@ class HuggingFaceDataset(BaseDataset):
 
                 # Store features (move to CPU to save GPU memory)
                 self.feats.append(features.squeeze(0).cpu())
+
+                # Store handcrafted features when requested
+                if self.feature_type in ["handcrafted", "fdmpa"]:
+                    if cached_hc is not None and audio_id in cached_hc:
+                        hc_features = cached_hc[audio_id]
+                    else:
+                        hc_features = self._extract_handcrafted_features(wav, sr)
+                    self.hc_feats.append(hc_features.cpu())
 
                 # Extract labels for requested aspects
                 labels_list = []
@@ -353,8 +450,23 @@ class HuggingFaceDataset(BaseDataset):
                 self.labels.append(labels)
 
                 # Store audio ID
-                audio_id = item.get("id", f"sample_{idx}")
                 self.audio_ids.append(str(audio_id))
+
+        if ssl_cache_path and cached_ssl is None:
+            ssl_dict = {aid: feat for aid, feat in zip(self.audio_ids, self.feats)}
+            with open(ssl_cache_path, "wb") as f:
+                pickle.dump(ssl_dict, f)
+            print(f"Saved cached SSL features: {ssl_cache_path}")
+
+        if (
+            self.feature_type in ["handcrafted", "fdmpa"]
+            and hc_cache_path
+            and cached_hc is None
+        ):
+            hc_dict = {aid: feat for aid, feat in zip(self.audio_ids, self.hc_feats)}
+            with open(hc_cache_path, "wb") as f:
+                pickle.dump(hc_dict, f)
+            print(f"Saved cached handcrafted features: {hc_cache_path}")
 
         print(f"Finished pre-extracting {len(self.feats)} samples")
 
@@ -367,11 +479,19 @@ class HuggingFaceDataset(BaseDataset):
         audio_id = self.audio_ids[idx]
         labels = self.labels[idx]
         features = self.feats[idx]
+        hc_features = None
+        if self.feature_type in ["handcrafted", "fdmpa"]:
+            hc_features = self.hc_feats[idx]
 
         cluster_idx = None
-        if len(self.cluster_indices) > 0:
+        if (
+            self.feature_type not in ["handcrafted", "fdmpa"]
+            and len(self.cluster_indices) > 0
+        ):
             cluster_idx = self.cluster_indices[idx]
 
+        if self.feature_type == "fdmpa":
+            return audio_id, labels, features, hc_features, cluster_idx
         return audio_id, labels, features, cluster_idx
 
 
@@ -412,6 +532,30 @@ def custom_collate_fn(batch: List[Tuple]) -> Tuple:
         list(paths),
         labels_tensor,
         padded_feats,
+        padded_cluster_idxs,
+    )
+
+
+def fdmpa_collate_fn(batch: List[Tuple]) -> Tuple:
+    batch = sorted(batch, key=lambda x: x[2].shape[0], reverse=True)
+    paths, labels, ssl_feats, hc_feats, cluster_idxs = zip(*batch)
+
+    labels_tensor = torch.stack(labels)
+    padded_ssl_feats = pad_sequence(ssl_feats, batch_first=True)
+    padded_hc_feats = pad_sequence(hc_feats, batch_first=True)
+
+    if cluster_idxs[0] is not None:
+        padded_cluster_idxs = pad_sequence(
+            cluster_idxs, batch_first=True, padding_value=-1
+        )
+    else:
+        padded_cluster_idxs = None
+
+    return (
+        list(paths),
+        labels_tensor,
+        padded_ssl_feats,
+        padded_hc_feats,
         padded_cluster_idxs,
     )
 
@@ -460,4 +604,5 @@ def create_dataset(
             device=device,
             max_duration_sec=kwargs.get("max_duration_sec", 30.0),
             cache_dir=kwargs.get("cache_dir", None),
+            feature_type=kwargs.get("feature_type", "ssl"),
         )

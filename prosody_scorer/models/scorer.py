@@ -1,7 +1,11 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import random
+from torch.nn.utils import weight_norm
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from prosody_scorer.models.util import mean_pooling, create_mask
+from prosody_scorer.models.mine import MINEModule
 
 
 # adapt: tanh -> GELU
@@ -258,3 +262,597 @@ class TransformerScorer(nn.Module):
         # return mask [batch_size, seq_len]
         mask_2d = torch.all(x == padding_value, dim=-1)
         return mask_2d
+
+
+class AttentiveStatsPooling(nn.Module):
+    def __init__(self, input_dim: int):
+        super().__init__()
+        self.attn = nn.Sequential(
+            nn.Linear(input_dim, input_dim),
+            nn.Tanh(),
+            nn.Linear(input_dim, 1),
+        )
+
+    def forward(
+        self, x: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        scores = self.attn(x)
+        if mask is not None:
+            safe_mask = mask.clone()
+            invalid_rows = ~safe_mask.any(dim=1)
+            if invalid_rows.any():
+                safe_mask[invalid_rows, 0] = True
+            scores = scores.masked_fill(~safe_mask.unsqueeze(-1), -1e9)
+            weights = torch.softmax(scores, dim=1)
+            weights = weights * safe_mask.unsqueeze(-1)
+            weights = weights / torch.clamp(weights.sum(dim=1, keepdim=True), min=1e-8)
+        else:
+            weights = torch.softmax(scores, dim=1)
+        mean = torch.sum(weights * x, dim=1)
+        second = torch.sum(weights * (x**2), dim=1)
+        std = torch.sqrt(torch.clamp(second - mean**2, min=1e-6))
+        return torch.cat([mean, std], dim=-1)
+
+
+class TemporalBranchEncoder(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, kernel_size: int = 5):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+        )
+        self.depthwise = nn.Conv1d(
+            hidden_dim,
+            hidden_dim,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            groups=hidden_dim,
+        )
+        self.pointwise = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=1)
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.act = nn.GELU()
+
+    def forward(self, x: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        x = self.proj(x)
+        x = x * valid_mask.unsqueeze(-1)
+        y = x.transpose(1, 2)
+        y = self.depthwise(y)
+        y = self.pointwise(y)
+        y = y.transpose(1, 2)
+        y = self.norm(y)
+        y = self.act(y)
+        y = y * valid_mask.unsqueeze(-1)
+        return y
+
+
+class FactorizedVectorQuantize(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        codebook_size: int,
+        codebook_dim: int,
+        commitment: float,
+    ):
+        super().__init__()
+        self.codebook_size = codebook_size
+        self.codebook_dim = codebook_dim
+        self.commitment = commitment
+
+        if dim != self.codebook_dim:
+            self.in_proj = weight_norm(nn.Linear(dim, self.codebook_dim))
+            self.out_proj = weight_norm(nn.Linear(self.codebook_dim, dim))
+        else:
+            self.in_proj = nn.Identity()
+            self.out_proj = nn.Identity()
+        self._codebook = nn.Embedding(codebook_size, self.codebook_dim)
+
+    @property
+    def codebook(self):
+        return self._codebook
+
+    def decode_code(self, embed_id: torch.Tensor) -> torch.Tensor:
+        return F.embedding(embed_id, self.codebook.weight).transpose(1, 2)
+
+    def decode_latents(self, latents: torch.Tensor):
+        # latents: [B, D, T]
+        bsz, dim, tlen = latents.shape
+        encodings = latents.transpose(1, 2).reshape(bsz * tlen, dim)
+        codebook = self.codebook.weight
+
+        encodings = F.normalize(encodings, dim=-1)
+        codebook = F.normalize(codebook, dim=-1)
+
+        dist = (
+            encodings.pow(2).sum(1, keepdim=True)
+            - 2 * encodings @ codebook.t()
+            + codebook.pow(2).sum(1, keepdim=True).t()
+        )
+        indices = (-dist).max(1)[1].view(bsz, tlen)
+        z_q = self.decode_code(indices)
+        return z_q, indices
+
+    def forward(self, z: torch.Tensor):
+        # z: [B, D, T]
+        z = z.transpose(1, 2)
+        z_e = self.in_proj(z)
+        z_e = z_e.transpose(1, 2)
+        z_q, indices = self.decode_latents(z_e)
+
+        if self.training:
+            commitment_loss = (
+                F.mse_loss(z_e, z_q.detach(), reduction="none").mean([1, 2])
+                * self.commitment
+            )
+            codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
+            commit_loss = commitment_loss + codebook_loss
+        else:
+            commit_loss = torch.zeros(z.shape[0], device=z.device)
+
+        # Straight-through estimator
+        z_q = z_e + (z_q - z_e).detach()
+
+        z_q = z_q.transpose(1, 2)
+        z_q = self.out_proj(z_q)
+        z_q = z_q.transpose(1, 2)
+        return z_q, indices, commit_loss
+
+
+class CrossAttnHCSSLScorer(nn.Module):
+    """
+    Cross-attention scorer that fuses SSL and handcrafted (HC) features
+    without using MINE.
+    """
+
+    def __init__(
+        self,
+        ssl_input_dim: int,
+        hc_input_dim: int,
+        hidden_dim: int,
+        scorers: list,
+        num_heads: int = 4,
+        depth: int = 2,
+        dropout_prob: float = 0.1,
+    ):
+        super().__init__()
+        if hidden_dim % num_heads != 0:
+            raise ValueError(
+                f"hidden_dim ({hidden_dim}) must be divisible by num_heads ({num_heads})"
+            )
+
+        self.num_outputs = len(scorers)
+        self.depth = depth
+
+        self.ssl_proj = nn.Sequential(
+            nn.Linear(ssl_input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+        )
+        self.hc_proj = nn.Sequential(
+            nn.Linear(hc_input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+        )
+
+        self.ssl_from_hc_layers = nn.ModuleList(
+            [
+                nn.MultiheadAttention(
+                    embed_dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=dropout_prob,
+                    batch_first=True,
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.hc_from_ssl_layers = nn.ModuleList(
+            [
+                nn.MultiheadAttention(
+                    embed_dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=dropout_prob,
+                    batch_first=True,
+                )
+                for _ in range(depth)
+            ]
+        )
+
+        self.ssl_attn_norms = nn.ModuleList(
+            [nn.LayerNorm(hidden_dim) for _ in range(depth)]
+        )
+        self.hc_attn_norms = nn.ModuleList(
+            [nn.LayerNorm(hidden_dim) for _ in range(depth)]
+        )
+
+        self.ssl_ffns = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim * 4),
+                    nn.GELU(),
+                    nn.Dropout(dropout_prob),
+                    nn.Linear(hidden_dim * 4, hidden_dim),
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.hc_ffns = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim * 4),
+                    nn.GELU(),
+                    nn.Dropout(dropout_prob),
+                    nn.Linear(hidden_dim * 4, hidden_dim),
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.ssl_ffn_norms = nn.ModuleList(
+            [nn.LayerNorm(hidden_dim) for _ in range(depth)]
+        )
+        self.hc_ffn_norms = nn.ModuleList(
+            [nn.LayerNorm(hidden_dim) for _ in range(depth)]
+        )
+
+        self.ssl_pool = AttentiveStatsPooling(hidden_dim)
+        self.hc_pool = AttentiveStatsPooling(hidden_dim)
+
+        fusion_dim = hidden_dim * 2 * 2
+        self.head = nn.Sequential(
+            nn.LayerNorm(fusion_dim),
+            nn.Linear(fusion_dim, hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout_prob),
+            nn.Linear(hidden_dim * 2, self.num_outputs),
+        )
+
+    def _valid_mask(self, x: torch.Tensor) -> torch.Tensor:
+        return x.abs().sum(dim=-1) > 0
+
+    def forward(self, ssl_feats: torch.Tensor, hc_feats: torch.Tensor) -> torch.Tensor:
+        ssl_mask = self._valid_mask(ssl_feats)
+        hc_mask = self._valid_mask(hc_feats)
+
+        ssl = self.ssl_proj(ssl_feats)
+        hc = self.hc_proj(hc_feats)
+        ssl = ssl * ssl_mask.unsqueeze(-1)
+        hc = hc * hc_mask.unsqueeze(-1)
+
+        for i in range(self.depth):
+            ssl_cross, _ = self.ssl_from_hc_layers[i](
+                query=ssl,
+                key=hc,
+                value=hc,
+                key_padding_mask=~hc_mask,
+                need_weights=False,
+            )
+            hc_cross, _ = self.hc_from_ssl_layers[i](
+                query=hc,
+                key=ssl,
+                value=ssl,
+                key_padding_mask=~ssl_mask,
+                need_weights=False,
+            )
+
+            ssl = self.ssl_attn_norms[i](ssl + ssl_cross)
+            hc = self.hc_attn_norms[i](hc + hc_cross)
+
+            ssl = self.ssl_ffn_norms[i](ssl + self.ssl_ffns[i](ssl))
+            hc = self.hc_ffn_norms[i](hc + self.hc_ffns[i](hc))
+
+            ssl = ssl * ssl_mask.unsqueeze(-1)
+            hc = hc * hc_mask.unsqueeze(-1)
+
+        ssl_global = self.ssl_pool(ssl, ssl_mask)
+        hc_global = self.hc_pool(hc, hc_mask)
+        fused = torch.cat([ssl_global, hc_global], dim=-1)
+        pred = self.head(fused)
+        return pred if self.num_outputs > 1 else pred[:, :1]
+
+
+class FDMPAScorer(nn.Module):
+    """
+    Factorized Domain-agnostic Mutual Information Maximization for Prosody Assessment.
+
+    This model decomposes SSL features into three prosodic branches:
+    - Intonation (int): Related to Pitch and Periodicity (HC slice 8-10)
+    - Rhythm (rhy): Related to PPG (HC slice 10-50)
+    - Prominence (pro): Related to Loudness (HC slice 0-8)
+    """
+
+    BRANCH_HC_SLICE = {
+        "int": slice(8, 10),
+        "rhy": slice(10, 50),
+        "pro": slice(0, 8),
+    }
+
+    def __init__(
+        self,
+        ssl_input_dim: int,
+        hidden_dim: int,
+        scorers: list,
+        mine_hidden_dim: int = 64,
+        mine_ema_decay: float = 0.99,
+        num_tokens: int = 16,
+        dropout_prob: float = 0.1,
+        hc_codebook_size: int = 1024,
+        hc_codebook_dim: int = 8,
+        hc_commitment: float = 0.25,
+    ):
+        super().__init__()
+        self.num_tokens = num_tokens
+        self.num_outputs = len(scorers)
+        self.branches = ["int", "rhy", "pro"]
+
+        # 1. SSL Encoders for each branch
+        self.ssl_encoders = nn.ModuleDict(
+            {
+                branch: TemporalBranchEncoder(ssl_input_dim, hidden_dim)
+                for branch in self.branches
+            }
+        )
+
+        # 2. HC Projections
+        self.hc_input_proj = nn.ModuleDict(
+            {
+                "int": nn.Sequential(
+                    nn.Linear(2, hidden_dim),
+                    nn.LayerNorm(hidden_dim),
+                    nn.GELU(),
+                ),
+                "rhy": nn.Sequential(
+                    nn.Linear(40, hidden_dim),
+                    nn.LayerNorm(hidden_dim),
+                    nn.GELU(),
+                ),
+                "pro": nn.Sequential(
+                    nn.Linear(8, hidden_dim),
+                    nn.LayerNorm(hidden_dim),
+                    nn.GELU(),
+                ),
+            }
+        )
+
+        # 3. FVQ Bottleneck for each branch (applied to SSL latents)
+        self.ssl_bottleneck = nn.ModuleDict(
+            {
+                branch: FactorizedVectorQuantize(
+                    dim=hidden_dim,
+                    codebook_size=hc_codebook_size,
+                    codebook_dim=hc_codebook_dim,
+                    commitment=hc_commitment,
+                )
+                for branch in self.branches
+            }
+        )
+
+        # 4. Pooling for global representations
+        self.ssl_stats_pool = nn.ModuleDict(
+            {branch: AttentiveStatsPooling(hidden_dim) for branch in self.branches}
+        )
+        self.hc_stats_pool = nn.ModuleDict(
+            {branch: AttentiveStatsPooling(hidden_dim) for branch in self.branches}
+        )
+
+        # 5. MINE Modules for MI estimation (Local and Global)
+        self.mine_local = nn.ModuleDict(
+            {
+                branch: MINEModule(
+                    hidden_dim, hidden_dim, mine_hidden_dim, mine_ema_decay
+                )
+                for branch in self.branches
+            }
+        )
+
+        # 6. Final Scorer Head
+        fusion_dim = hidden_dim * 2 * len(self.branches)
+        self.head = nn.Sequential(
+            nn.LayerNorm(fusion_dim),
+            nn.Linear(fusion_dim, hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout_prob),
+            nn.Linear(hidden_dim * 2, self.num_outputs),
+        )
+
+        # Optional branch-specific auxiliary heads
+        self.branch_heads = nn.ModuleDict(
+            {
+                branch: nn.Sequential(
+                    nn.LayerNorm(hidden_dim * 2),
+                    nn.Linear(hidden_dim * 2, hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(hidden_dim, self.num_outputs),
+                )
+                for branch in self.branches
+            }
+        )
+
+    def _valid_mask(self, x: torch.Tensor) -> torch.Tensor:
+        return x.abs().sum(dim=-1) > 0
+
+    def _adaptive_pool_tokens(
+        self, x: torch.Tensor, valid_mask: torch.Tensor, num_tokens: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        bsz, _, dim = x.shape
+        out_tokens = x.new_zeros(bsz, num_tokens, dim)
+        out_mask = torch.zeros(bsz, num_tokens, device=x.device, dtype=torch.bool)
+        for b in range(bsz):
+            valid_len = int(valid_mask[b].sum().item())
+            if valid_len <= 0:
+                continue
+            seq = x[b, :valid_len].transpose(0, 1).unsqueeze(0)
+            pooled = nn.AdaptiveAvgPool1d(num_tokens)(seq)
+            out_tokens[b] = pooled.squeeze(0).transpose(0, 1)
+            out_mask[b] = True
+        return out_tokens, out_mask
+
+    def forward(self, ssl_feats: torch.Tensor, hc_feats: torch.Tensor):
+        ssl_mask = self._valid_mask(ssl_feats)
+        hc_mask = self._valid_mask(hc_feats)
+
+        # Determine the target number of tokens based on the minimal sequence length in the current batch
+        ssl_lens = ssl_mask.sum(dim=1)
+        hc_lens = hc_mask.sum(dim=1)
+        batch_min_len = int(torch.min(torch.min(ssl_lens), torch.min(hc_lens)).item())
+
+        # Determine target number of tokens
+        if self.num_tokens > 0:
+            target_tokens = (
+                min(self.num_tokens, batch_min_len)
+                if batch_min_len > 0
+                else self.num_tokens
+            )
+        else:
+            target_tokens = max(1, batch_min_len)
+
+        ssl_tokens = {}
+        ssl_token_mask = {}
+        ssl_global = {}
+        ssl_commit_losses = {}
+
+        hc_tokens = {}
+        hc_token_mask = {}
+        hc_global = {}
+
+        for branch in self.branches:
+            # --- SSL Path ---
+            # Encode
+            ssl_seq = self.ssl_encoders[branch](ssl_feats, ssl_mask)
+            # Quantize (FVQ)
+            quant_ssl_seq, _, commit_loss = self.ssl_bottleneck[branch](
+                ssl_seq.transpose(1, 2)
+            )
+            ssl_seq = quant_ssl_seq.transpose(1, 2) * ssl_mask.unsqueeze(-1)
+            ssl_commit_losses[branch] = commit_loss.mean()
+
+            # Pool to tokens using adaptive target length
+            s_tok, s_tok_mask = self._adaptive_pool_tokens(
+                ssl_seq, ssl_mask, target_tokens
+            )
+            ssl_tokens[branch] = s_tok
+            ssl_token_mask[branch] = s_tok_mask
+            ssl_global[branch] = self.ssl_stats_pool[branch](s_tok, s_tok_mask)
+
+            # --- HC Path ---
+            sl = self.BRANCH_HC_SLICE[branch]
+            hc_branch = hc_feats[:, :, sl]
+
+            # Specific normalization for Intonation branch (Pitch)
+            if branch == "int":
+                pitch = hc_branch[:, :, 0:1]
+                periodicity = hc_branch[:, :, 1:2]
+                pitch = torch.log(pitch + 1.0)
+                hc_branch = torch.cat([pitch, periodicity], dim=-1)
+
+            hc_seq = self.hc_input_proj[branch](hc_branch) * hc_mask.unsqueeze(-1)
+
+            # Pool to tokens using adaptive target length
+            h_tok, h_tok_mask = self._adaptive_pool_tokens(
+                hc_seq, hc_mask, target_tokens
+            )
+            hc_tokens[branch] = h_tok
+            hc_token_mask[branch] = h_tok_mask
+            hc_global[branch] = self.hc_stats_pool[branch](h_tok, h_tok_mask)
+
+        # Prediction
+        fused = torch.cat([ssl_global[b] for b in self.branches], dim=-1)
+        pred = self.head(fused)
+        if self.num_outputs == 1:
+            pred = pred[:, :1]
+
+        total_ssl_commit_loss = torch.stack(list(ssl_commit_losses.values())).mean()
+
+        # Auxiliary branch predictions
+        branch_preds = {}
+        for branch in self.branches:
+            branch_preds[branch] = self.branch_heads[branch](ssl_global[branch])
+            if self.num_outputs == 1:
+                branch_preds[branch] = branch_preds[branch][:, :1]
+
+        branch_diversity = self.compute_branch_diversity(ssl_global)
+
+        aux = {
+            "ssl_tokens": ssl_tokens,
+            "ssl_token_mask": ssl_token_mask,
+            "hc_tokens": hc_tokens,
+            "hc_token_mask": hc_token_mask,
+            "ssl_global": ssl_global,
+            "hc_global": hc_global,
+            "ssl_commit_loss": total_ssl_commit_loss,
+            "branch_preds": branch_preds,
+            "branch_diversity": branch_diversity,
+        }
+        return pred, aux
+
+    def compute_mi_terms(
+        self,
+        ssl_tokens: dict,
+        hc_tokens: dict,
+        ssl_global: dict,
+        hc_global: dict,
+        update_ema: bool = True,
+    ):
+        """Used in stage 1 and stage 2 training to get MI estimates."""
+        local_terms = []
+        mi_local_dict = {}
+
+        for branch in self.branches:
+            # Local MI: I(z_tok; hc_tok)
+            mi_local = self.mine_local[branch].mi_lower_bound(
+                ssl_tokens[branch], hc_tokens[branch], update_ema=update_ema
+            )
+            local_terms.append(mi_local)
+            mi_local_dict[branch] = mi_local
+
+        # Since global MINE was removed, return zero tensors for global terms for compatibility
+        device = None
+        for v in ssl_tokens.values():
+            device = v.device
+            break
+        if device is None:
+            device = torch.device("cpu")
+
+        mi_global_sum = torch.tensor(0.0, device=device)
+        mi_global_dict = {
+            branch: torch.tensor(0.0, device=device) for branch in self.branches
+        }
+
+        return (
+            torch.stack(local_terms).sum(),
+            mi_global_sum,
+            mi_local_dict,
+            mi_global_dict,
+        )
+
+    def mine_parameters(self):
+        for module in [self.mine_local]:
+            for p in module.parameters():
+                yield p
+
+    def non_mine_parameters(self):
+        mine_param_ids = {id(p) for p in self.mine_parameters()}
+        for p in self.parameters():
+            if id(p) not in mine_param_ids:
+                yield p
+
+    def compute_branch_diversity(self, ssl_global: dict) -> dict:
+        """
+        Compute cosine similarity between branch representations.
+        Returns dict with pairwise similarities and mean.
+        """
+        branches_list = ["int", "rhy", "pro"]
+        similarities = {}
+        sim_values = []
+
+        for i, b1 in enumerate(branches_list):
+            for j, b2 in enumerate(branches_list):
+                if i >= j:
+                    continue
+                g1 = F.normalize(ssl_global[b1], p=2, dim=1)
+                g2 = F.normalize(ssl_global[b2], p=2, dim=1)
+                sim = (g1 * g2).sum(dim=1).mean()
+                similarities[f"{b1}-{b2}"] = sim.item()
+                sim_values.append(sim)
+
+        mean_sim = torch.stack(sim_values).mean().item() if sim_values else 0.0
+        similarities["mean"] = mean_sim
+        return similarities
