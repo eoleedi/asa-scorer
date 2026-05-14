@@ -31,7 +31,7 @@ tag_aspect=${aspect// /+}
 tag=ezai-champ2023_${tag_aspect}Score_trainontest
 # fluency prosodic
 
-exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
+exp_dir=exp/Ezai-Champ2023/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
 
 # repeat times
 repeat_list=(0)

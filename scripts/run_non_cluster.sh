@@ -30,7 +30,7 @@ tag_aspect=${aspect// /+}
 tag=SpeechOcean762_${tag_aspect}Score_non_cluster
 # acc cpn flu psd ttl
 
-exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
+exp_dir=exp/SpeechOcean762/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
 
 # repeat times
 repeat_list=(0 1 2 3 4)

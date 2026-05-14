@@ -28,7 +28,7 @@ aspect="fluency prosodic"
 tag_aspect=${aspect// /+}
 tag=SSL_feat_${tag_aspect}TFR
 
-exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}/br
+exp_dir=exp/SpeechOcean762/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}/br
 
 # repeat times
 repeat_list=(0 1 2 3 4)

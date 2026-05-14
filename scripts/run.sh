@@ -29,10 +29,10 @@ model(){
 
 aspect="prosodic"
 tag_aspect=${aspect// /+}
-tag=SSLfeat_${tag_aspect}Score
+tag=ClusterScorer_${tag_aspect}_baseline
 # acc cpn flu psd ttl
 
-exp_dir=exp/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
+exp_dir=exp/SpeechOcean762/${tag}/${lr}-${depth}-${batch_size}-${hidden_dim}-${model}-br
 
 # repeat times
 repeat_list=(0)
