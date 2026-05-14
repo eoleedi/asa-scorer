@@ -8,6 +8,7 @@ dependencies = [
     "cython>=3.2.4",
     "datasets==4.2.0",
     "fairseq==0.12.2",
+    "graphviz>=0.21",
     "matplotlib>=3.10.8",
     "numpy<2.0",
     "promonet>=0.0.1",
