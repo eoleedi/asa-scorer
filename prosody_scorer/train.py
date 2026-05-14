@@ -27,6 +27,7 @@ from prosody_scorer.speech_datasets import (
     create_dataset,
     custom_collate_fn,
     fdmpa_collate_fn,
+    hcssl_collate_fn,
 )
 
 aspect_name_map = {
@@ -1139,6 +1140,11 @@ def main():
     # Determine device for feature extraction
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Override feature_type for models that require HC features
+    if args.model in ["FDMPAScorer", "CrossAttnHCSSLScorer"]:
+        args.feature_type = "fdmpa"
+        print(f"Setting feature_type to 'fdmpa' for {args.model}")
+
     # Create datasets using the factory function
     print(f"Dataset type: {args.dataset_type}")
     print(f"Train split: {args.train_split}, Test split: {args.test_split}")
@@ -1168,22 +1174,29 @@ def main():
     )
 
     # Create data loaders
+    # Select appropriate collate function based on model
+    if args.model == "FDMPAScorer":
+        train_collate_fn = fdmpa_collate_fn
+        test_collate_fn = fdmpa_collate_fn
+    elif args.model == "CrossAttnHCSSLScorer":
+        train_collate_fn = hcssl_collate_fn
+        test_collate_fn = hcssl_collate_fn
+    else:
+        train_collate_fn = custom_collate_fn
+        test_collate_fn = custom_collate_fn
+
     tr_dataloader = DataLoader(
         tr_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        collate_fn=fdmpa_collate_fn
-        if args.model in ["FDMPAScorer", "CrossAttnHCSSLScorer"]
-        else custom_collate_fn,
+        collate_fn=train_collate_fn,
     )
 
     te_dataloader = DataLoader(
         te_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=fdmpa_collate_fn
-        if args.model in ["FDMPAScorer", "CrossAttnHCSSLScorer"]
-        else custom_collate_fn,
+        collate_fn=test_collate_fn,
     )
 
     # Get input dimension from first sample

@@ -536,6 +536,29 @@ def custom_collate_fn(batch: List[Tuple]) -> Tuple:
     )
 
 
+def hcssl_collate_fn(batch: List[Tuple]) -> Tuple:
+    """
+    Collate function for CrossAttnHCSSLScorer.
+    Expects batch items with 5 elements: (path, labels, ssl_feats, hc_feats, cluster_idx)
+    Returns: (paths, labels, ssl_feats, hc_feats, None) where None replaces cluster_idx
+    This matches the 5-element format expected by unpack_batch().
+    """
+    batch = sorted(batch, key=lambda x: x[2].shape[0], reverse=True)
+    paths, labels, ssl_feats, hc_feats, cluster_idxs = zip(*batch)
+
+    labels_tensor = torch.stack(labels)
+    padded_ssl_feats = pad_sequence(ssl_feats, batch_first=True)
+    padded_hc_feats = pad_sequence(hc_feats, batch_first=True)
+
+    return (
+        list(paths),
+        labels_tensor,
+        padded_ssl_feats,
+        padded_hc_feats,
+        None,  # No cluster indices for CrossAttnHCSSLScorer
+    )
+
+
 def fdmpa_collate_fn(batch: List[Tuple]) -> Tuple:
     batch = sorted(batch, key=lambda x: x[2].shape[0], reverse=True)
     paths, labels, ssl_feats, hc_feats, cluster_idxs = zip(*batch)
