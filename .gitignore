@@ -11,3 +11,5 @@ tsne.ipynb
 .env
 
 __pycache__/
+
+analysis/
