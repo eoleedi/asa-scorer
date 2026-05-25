@@ -2792,8 +2792,8 @@ dependencies = [
     { name = "torchaudio", version = "2.9.0", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "python_full_version < '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
     { name = "torchaudio", version = "2.9.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
     { name = "torchaudio", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(python_full_version >= '3.15' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux')" },
-    { name = "torchcodec", version = "0.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'linux'" },
-    { name = "torchcodec", version = "0.8.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
+    { name = "torchcodec", version = "0.8.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'linux'" },
+    { name = "torchcodec", version = "0.8.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
     { name = "tqdm" },
     { name = "transformers" },
 ]
@@ -2816,8 +2816,8 @@ requires-dist = [
     { name = "torch", marker = "sys_platform == 'linux'", specifier = "==2.9.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchaudio", marker = "sys_platform != 'linux'", specifier = "==2.9.0", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torchaudio", marker = "sys_platform == 'linux'", specifier = "==2.9.0", index = "https://download.pytorch.org/whl/cu128" },
-    { name = "torchcodec", marker = "sys_platform != 'linux'", specifier = "==0.8.0", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torchcodec", marker = "sys_platform == 'linux'", specifier = "==0.8.0", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torchcodec", marker = "sys_platform != 'linux'", specifier = "==0.8.1", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torchcodec", marker = "sys_platform == 'linux'", specifier = "==0.8.1", index = "https://download.pytorch.org/whl/cu128" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "transformers", specifier = ">=5.2.0" },
 ]
@@ -4054,7 +4054,7 @@ wheels = [
 
 [[package]]
 name = "torchcodec"
-version = "0.8.0"
+version = "0.8.1"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux'",
@@ -4065,17 +4065,17 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'darwin'",
 ]
 wheels = [
-    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:36e261367eee07db787a191dd0cd73a08df426c49730466b497cb12390e5d514", upload-time = "2026-01-26T17:10:54Z" },
-    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.0-cp311-cp311-win_amd64.whl", hash = "sha256:aeea99b2518d3ac1fbafcb84eb22d202faeac8b61581d14d3fdd14357ac4f560", upload-time = "2026-01-26T17:10:55Z" },
-    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:af82d1fac3667335e089dc958b5e8eef5458e37d65cb3a94ebf81f45f00f7805", upload-time = "2026-01-26T17:10:55Z" },
-    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.0-cp312-cp312-win_amd64.whl", hash = "sha256:318da9af9179d156be0a84296e909d51e4cd758598eaaea08c828790c80bf977", upload-time = "2026-01-26T17:10:56Z" },
-    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.0-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:1f3309252d035c888e6ae4518f5aca24f1c38f163124792d8a29a6872bf457f2", upload-time = "2026-01-26T17:10:57Z" },
-    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.0-cp313-cp313-win_amd64.whl", hash = "sha256:c69285cb393c3b36c7bcc4e59e304076ea22b350ff6adca4a2a09b5f3f81f15c", upload-time = "2026-01-26T17:10:58Z" },
+    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:2b8c8c32cb8f258b350baf566dfc2fe87e3fbbbe7805acf7195226d67a92d985", upload-time = "2026-01-26T17:11:00Z" },
+    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.1-cp311-cp311-win_amd64.whl", hash = "sha256:1ba7dda2acd3bcd8f3a8f59b2a0faf77042456d98304f2f7d5b7d4f521ee8a53", upload-time = "2026-01-26T17:11:01Z" },
+    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:fc6f352d97eab82527d2fbf49f18f679946803d3269d6adb822859cc0bf4dd9e", upload-time = "2026-01-26T17:11:02Z" },
+    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.1-cp312-cp312-win_amd64.whl", hash = "sha256:d9b93e08e59f842861de1e0ce7b5a4e2ad2a069ec65041dfed6978f0e6cda30c", upload-time = "2026-01-26T17:11:03Z" },
+    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.1-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:7cbf4bf484cd86f57cdcec70f4ccd478a59e8ed5808482d42216b68313d1a485", upload-time = "2026-01-26T17:11:03Z" },
+    { url = "https://download.pytorch.org/whl/cpu/torchcodec-0.8.1-cp313-cp313-win_amd64.whl", hash = "sha256:eceacd3246aff417f484194c796b569dffef6f1156347418c51b0d8b9f94e31d", upload-time = "2026-01-26T17:11:04Z" },
 ]
 
 [[package]]
 name = "torchcodec"
-version = "0.8.0+cu128"
+version = "0.8.1+cu128"
 source = { registry = "https://download.pytorch.org/whl/cu128" }
 resolution-markers = [
     "(python_full_version >= '3.13' and platform_machine == 'aarch64' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (python_full_version >= '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux')",
@@ -4089,9 +4089,9 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
 ]
 wheels = [
-    { url = "https://download.pytorch.org/whl/cu128/torchcodec-0.8.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:7ecc38c1d3b195507fcc893082cbca2947bf1664f3df8dbe44cd7f463e1e4c9d", upload-time = "2026-01-26T17:33:23Z" },
-    { url = "https://download.pytorch.org/whl/cu128/torchcodec-0.8.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:c0195d81784f48c0d9d265c0d72324a65e1cd1e70c8213b95b4ff483493621ab", upload-time = "2026-01-26T17:33:23Z" },
-    { url = "https://download.pytorch.org/whl/cu128/torchcodec-0.8.0%2Bcu128-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:0f278cc6610d420ad8c79ac7c4be930f33b37970c14686f5baa9f657aa0c9497", upload-time = "2026-01-26T17:33:24Z" },
+    { url = "https://download.pytorch.org/whl/cu128/torchcodec-0.8.1%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:7a2c6bdcf2a482c7f551222e73642fdd3d2748078db435b2cc7f8e9558d72d42", upload-time = "2026-01-26T17:33:24Z" },
+    { url = "https://download.pytorch.org/whl/cu128/torchcodec-0.8.1%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:88995dcec29f159336e286b65053e93d1332836dbcff69d0ea268d8f59863f75", upload-time = "2026-01-26T17:33:25Z" },
+    { url = "https://download.pytorch.org/whl/cu128/torchcodec-0.8.1%2Bcu128-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:82c6f1ce5be607e05277d7eadd0fd16e9a2781c554339701dadf4ed68da6dbac", upload-time = "2026-01-26T17:33:25Z" },
 ]
 
 [[package]]
