@@ -549,6 +549,385 @@ class CrossAttnHCSSLScorer(nn.Module):
         return pred if self.num_outputs > 1 else pred[:, :1]
 
 
+class LayerWeightedHCSSLScorer(nn.Module):
+    """
+    HC-guided scorer that learns subconstruct-specific HuBERT layer mixtures.
+
+    Expected inputs:
+      - ssl_layers: [B, L, T_ssl, D_ssl]
+      - hc_feats:   [B, T_hc, 50]
+
+    The three branches keep the FDMPA naming/order: int, rhy, pro.
+    """
+
+    BRANCH_HC_SLICE = {
+        "int": slice(8, 10),
+        "rhy": slice(10, 50),
+        "pro": slice(0, 8),
+    }
+    BRANCH_HC_DIM = {"int": 2, "rhy": 40, "pro": 8}
+
+    def __init__(
+        self,
+        ssl_input_dim: int,
+        num_layers: int,
+        hidden_dim: int,
+        scorers: list,
+        num_tokens: int = 16,
+        dropout_prob: float = 0.1,
+        hc_aux_weight: float = 0.1,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        self.num_tokens = num_tokens
+        self.num_outputs = len(scorers)
+        self.hc_aux_weight = hc_aux_weight
+        self.branches = ["int", "rhy", "pro"]
+
+        self.layer_logits = nn.Parameter(torch.zeros(len(self.branches), num_layers))
+
+        self.ssl_encoders = nn.ModuleDict(
+            {
+                branch: TemporalBranchEncoder(ssl_input_dim, hidden_dim)
+                for branch in self.branches
+            }
+        )
+        self.ssl_stats_pool = nn.ModuleDict(
+            {branch: AttentiveStatsPooling(hidden_dim) for branch in self.branches}
+        )
+        self.hc_predictors = nn.ModuleDict(
+            {
+                branch: nn.Sequential(
+                    nn.LayerNorm(hidden_dim),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Dropout(dropout_prob),
+                    nn.Linear(hidden_dim, self.BRANCH_HC_DIM[branch]),
+                )
+                for branch in self.branches
+            }
+        )
+
+        fusion_dim = hidden_dim * 2 * len(self.branches)
+        self.head = nn.Sequential(
+            nn.LayerNorm(fusion_dim),
+            nn.Linear(fusion_dim, hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout_prob),
+            nn.Linear(hidden_dim * 2, self.num_outputs),
+        )
+
+    # HC auxiliary normalization removed: only keep necessary HC transforms
+
+    def _valid_mask(self, x: torch.Tensor) -> torch.Tensor:
+        return x.abs().sum(dim=-1) > 0
+
+    def _all_layer_valid_mask(self, ssl_layers: torch.Tensor) -> torch.Tensor:
+        # ssl_layers: [B, L, T, D]. A frame is valid if any layer has non-zero values.
+        return ssl_layers.abs().sum(dim=(1, 3)) > 0
+
+    def _adaptive_pool_tokens(
+        self, x: torch.Tensor, valid_mask: torch.Tensor, num_tokens: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        bsz, _, dim = x.shape
+        out_tokens = x.new_zeros(bsz, num_tokens, dim)
+        out_mask = torch.zeros(bsz, num_tokens, device=x.device, dtype=torch.bool)
+        for b in range(bsz):
+            valid_len = int(valid_mask[b].sum().item())
+            if valid_len <= 0:
+                continue
+            seq = x[b, :valid_len].transpose(0, 1).unsqueeze(0)
+            pooled = nn.AdaptiveAvgPool1d(num_tokens)(seq)
+            out_tokens[b] = pooled.squeeze(0).transpose(0, 1)
+            out_mask[b] = True
+        return out_tokens, out_mask
+
+    def _normalize_hc_branch(
+        self, branch: str, hc_branch: torch.Tensor
+    ) -> torch.Tensor:
+        # Remove mean/std normalization; keep only deterministic transforms
+        if branch == "pro":
+            return hc_branch
+        if branch == "int":
+            pitch = torch.log(torch.clamp(hc_branch[:, :, 0:1], min=0.0) + 1.0)
+            periodicity = hc_branch[:, :, 1:2]
+            return torch.cat([pitch, periodicity], dim=-1)
+        return hc_branch
+
+    def compute_branch_diversity(self, ssl_global: dict) -> dict:
+        branches_list = ["int", "rhy", "pro"]
+        similarities = {}
+        sim_values = []
+        for i, b1 in enumerate(branches_list):
+            for j, b2 in enumerate(branches_list):
+                if i >= j:
+                    continue
+                g1 = F.normalize(ssl_global[b1], p=2, dim=1)
+                g2 = F.normalize(ssl_global[b2], p=2, dim=1)
+                sim = (g1 * g2).sum(dim=1).mean()
+                similarities[f"{b1}-{b2}"] = sim.item()
+                sim_values.append(sim)
+        similarities["mean"] = (
+            torch.stack(sim_values).mean().item() if sim_values else 0.0
+        )
+        return similarities
+
+    def forward(self, ssl_layers: torch.Tensor, hc_feats: torch.Tensor | None = None):
+        if ssl_layers.dim() != 4:
+            raise ValueError(
+                f"LayerWeightedHCSSLScorer expects ssl_layers [B, L, T, D], got {tuple(ssl_layers.shape)}"
+            )
+        if ssl_layers.size(1) != self.num_layers:
+            raise ValueError(
+                f"Expected {self.num_layers} SSL layers, got {ssl_layers.size(1)}"
+            )
+
+        ssl_mask = self._all_layer_valid_mask(ssl_layers)
+        layer_weights = torch.softmax(self.layer_logits, dim=-1)
+
+        ssl_tokens = {}
+        ssl_token_mask = {}
+        ssl_global = {}
+        hc_aux_preds = {}
+        hc_aux_targets = {}
+        hc_aux_mask = {}
+
+        hc_mask = self._valid_mask(hc_feats) if hc_feats is not None else None
+        if hc_feats is not None and hc_feats.size(1) != ssl_layers.size(2):
+            raise ValueError(
+                "LayerWeightedHCSSLScorer expects HC features to be resampled "
+                f"to SSL frame length: got T_hc={hc_feats.size(1)}, "
+                f"T_ssl={ssl_layers.size(2)}"
+            )
+        batch_min_len = int(torch.min(ssl_mask.sum(dim=1)).item())
+        if self.num_tokens > 0:
+            target_tokens = (
+                min(self.num_tokens, batch_min_len)
+                if batch_min_len > 0
+                else self.num_tokens
+            )
+        else:
+            target_tokens = max(1, batch_min_len)
+
+        for branch_idx, branch in enumerate(self.branches):
+            weighted_ssl = torch.einsum(
+                "l,bltd->btd", layer_weights[branch_idx], ssl_layers
+            )
+            ssl_seq = self.ssl_encoders[branch](weighted_ssl, ssl_mask)
+            s_tok, s_tok_mask = self._adaptive_pool_tokens(
+                ssl_seq, ssl_mask, target_tokens
+            )
+            ssl_tokens[branch] = s_tok
+            ssl_token_mask[branch] = s_tok_mask
+            ssl_global[branch] = self.ssl_stats_pool[branch](ssl_seq, ssl_mask)
+
+            if hc_feats is not None:
+                hc_branch = hc_feats[:, :, self.BRANCH_HC_SLICE[branch]]
+                hc_branch = self._normalize_hc_branch(branch, hc_branch)
+                hc_aux_preds[branch] = self.hc_predictors[branch](ssl_seq)
+                hc_aux_targets[branch] = hc_branch
+                hc_aux_mask[branch] = ssl_mask & hc_mask
+
+        fused = torch.cat([ssl_global[b] for b in self.branches], dim=-1)
+        pred = self.head(fused)
+        if self.num_outputs == 1:
+            pred = pred[:, :1]
+
+        aux = {
+            "layer_weights": layer_weights,
+            "ssl_tokens": ssl_tokens,
+            "ssl_token_mask": ssl_token_mask,
+            "ssl_global": ssl_global,
+            "hc_aux_preds": hc_aux_preds,
+            "hc_aux_targets": hc_aux_targets,
+            "hc_aux_mask": hc_aux_mask,
+            "branch_diversity": self.compute_branch_diversity(ssl_global),
+        }
+        return pred, aux
+
+
+class SingleLayerHCSSLScorer(nn.Module):
+    """
+    Single-layer HuBERT scorer with HC-group prediction auxiliary losses.
+
+    Expected inputs:
+      - ssl_feats: [B, T_ssl, D_ssl]
+      - hc_feats:  [B, T_hc, 50]
+
+    Unlike FDMPAScorer, this model does not use FVQ or MINE. Each SSL branch
+    predicts its matching handcrafted feature group as an auxiliary task:
+      - int -> pitch + periodicity
+      - rhy -> PPG
+      - pro -> loudness
+    """
+
+    BRANCH_HC_SLICE = {
+        "int": slice(8, 10),
+        "rhy": slice(10, 50),
+        "pro": slice(0, 8),
+    }
+    BRANCH_HC_DIM = {"int": 2, "rhy": 40, "pro": 8}
+
+    def __init__(
+        self,
+        ssl_input_dim: int,
+        hidden_dim: int,
+        scorers: list,
+        num_tokens: int = 16,
+        dropout_prob: float = 0.1,
+    ):
+        super().__init__()
+        self.num_tokens = num_tokens
+        self.num_outputs = len(scorers)
+        self.branches = ["int", "rhy", "pro"]
+
+        self.ssl_encoders = nn.ModuleDict(
+            {
+                branch: TemporalBranchEncoder(ssl_input_dim, hidden_dim)
+                for branch in self.branches
+            }
+        )
+        self.ssl_stats_pool = nn.ModuleDict(
+            {branch: AttentiveStatsPooling(hidden_dim) for branch in self.branches}
+        )
+        self.hc_predictors = nn.ModuleDict(
+            {
+                branch: nn.Sequential(
+                    nn.LayerNorm(hidden_dim),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Dropout(dropout_prob),
+                    nn.Linear(hidden_dim, self.BRANCH_HC_DIM[branch]),
+                )
+                for branch in self.branches
+            }
+        )
+
+        fusion_dim = hidden_dim * 2 * len(self.branches)
+        self.head = nn.Sequential(
+            nn.LayerNorm(fusion_dim),
+            nn.Linear(fusion_dim, hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout_prob),
+            nn.Linear(hidden_dim * 2, self.num_outputs),
+        )
+
+    # HC auxiliary normalization removed: keep only deterministic transforms
+
+    def _valid_mask(self, x: torch.Tensor) -> torch.Tensor:
+        return x.abs().sum(dim=-1) > 0
+
+    def _adaptive_pool_tokens(
+        self, x: torch.Tensor, valid_mask: torch.Tensor, num_tokens: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        bsz, _, dim = x.shape
+        out_tokens = x.new_zeros(bsz, num_tokens, dim)
+        out_mask = torch.zeros(bsz, num_tokens, device=x.device, dtype=torch.bool)
+        for b in range(bsz):
+            valid_len = int(valid_mask[b].sum().item())
+            if valid_len <= 0:
+                continue
+            seq = x[b, :valid_len].transpose(0, 1).unsqueeze(0)
+            pooled = nn.AdaptiveAvgPool1d(num_tokens)(seq)
+            out_tokens[b] = pooled.squeeze(0).transpose(0, 1)
+            out_mask[b] = True
+        return out_tokens, out_mask
+
+    def _normalize_hc_branch(
+        self, branch: str, hc_branch: torch.Tensor
+    ) -> torch.Tensor:
+        # Remove mean/std normalization; keep only deterministic transforms
+        if branch == "pro":
+            return hc_branch
+        if branch == "int":
+            pitch = torch.log(torch.clamp(hc_branch[:, :, 0:1], min=0.0) + 1.0)
+            periodicity = hc_branch[:, :, 1:2]
+            return torch.cat([pitch, periodicity], dim=-1)
+        return hc_branch
+
+    def compute_branch_diversity(self, ssl_global: dict) -> dict:
+        branches_list = ["int", "rhy", "pro"]
+        similarities = {}
+        sim_values = []
+        for i, b1 in enumerate(branches_list):
+            for j, b2 in enumerate(branches_list):
+                if i >= j:
+                    continue
+                g1 = F.normalize(ssl_global[b1], p=2, dim=1)
+                g2 = F.normalize(ssl_global[b2], p=2, dim=1)
+                sim = (g1 * g2).sum(dim=1).mean()
+                similarities[f"{b1}-{b2}"] = sim.item()
+                sim_values.append(sim)
+        similarities["mean"] = (
+            torch.stack(sim_values).mean().item() if sim_values else 0.0
+        )
+        return similarities
+
+    def forward(self, ssl_feats: torch.Tensor, hc_feats: torch.Tensor):
+        if ssl_feats.dim() != 3:
+            raise ValueError(
+                f"SingleLayerHCSSLScorer expects ssl_feats [B, T, D], got {tuple(ssl_feats.shape)}"
+            )
+        if hc_feats is None:
+            raise ValueError("SingleLayerHCSSLScorer requires handcrafted features.")
+
+        ssl_mask = self._valid_mask(ssl_feats)
+        hc_mask = self._valid_mask(hc_feats)
+        if hc_feats.size(1) != ssl_feats.size(1):
+            raise ValueError(
+                "SingleLayerHCSSLScorer expects HC features to be resampled "
+                f"to SSL frame length: got T_hc={hc_feats.size(1)}, "
+                f"T_ssl={ssl_feats.size(1)}"
+            )
+        batch_min_len = int(torch.min(ssl_mask.sum(dim=1)).item())
+        if self.num_tokens > 0:
+            target_tokens = (
+                min(self.num_tokens, batch_min_len)
+                if batch_min_len > 0
+                else self.num_tokens
+            )
+        else:
+            target_tokens = max(1, batch_min_len)
+
+        ssl_tokens = {}
+        ssl_token_mask = {}
+        ssl_global = {}
+        hc_aux_preds = {}
+        hc_aux_targets = {}
+        hc_aux_mask = {}
+
+        for branch in self.branches:
+            ssl_seq = self.ssl_encoders[branch](ssl_feats, ssl_mask)
+            s_tok, s_tok_mask = self._adaptive_pool_tokens(
+                ssl_seq, ssl_mask, target_tokens
+            )
+            ssl_tokens[branch] = s_tok
+            ssl_token_mask[branch] = s_tok_mask
+            ssl_global[branch] = self.ssl_stats_pool[branch](ssl_seq, ssl_mask)
+
+            hc_branch = hc_feats[:, :, self.BRANCH_HC_SLICE[branch]]
+            hc_branch = self._normalize_hc_branch(branch, hc_branch)
+            hc_aux_preds[branch] = self.hc_predictors[branch](ssl_seq)
+            hc_aux_targets[branch] = hc_branch
+            hc_aux_mask[branch] = ssl_mask & hc_mask
+
+        fused = torch.cat([ssl_global[b] for b in self.branches], dim=-1)
+        pred = self.head(fused)
+        if self.num_outputs == 1:
+            pred = pred[:, :1]
+
+        aux = {
+            "ssl_tokens": ssl_tokens,
+            "ssl_token_mask": ssl_token_mask,
+            "ssl_global": ssl_global,
+            "hc_aux_preds": hc_aux_preds,
+            "hc_aux_targets": hc_aux_targets,
+            "hc_aux_mask": hc_aux_mask,
+            "branch_diversity": self.compute_branch_diversity(ssl_global),
+        }
+        return pred, aux
+
+
 class FDMPAScorer(nn.Module):
     """
     Factorized Domain-agnostic Mutual Information Maximization for Prosody Assessment.

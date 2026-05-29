@@ -193,6 +193,16 @@ def main():
     audio_model = audio_model.to(device)
     audio_model.eval()
 
+    # Inform penn about preferred GPU (if any)
+    try:
+        import penn as _penn
+        if device.type == 'cuda':
+            _penn._DEFAULT_GPU = device.index if device.index is not None else 0
+        else:
+            _penn._DEFAULT_GPU = None
+    except Exception:
+        pass
+
     feature_extractor = torchaudio.pipelines.HUBERT_LARGE.get_model()
     feature_extractor = feature_extractor.to(device)
     feature_extractor.eval()
