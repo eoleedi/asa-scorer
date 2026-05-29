@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from prosody_scorer.models import (
     ClusterScorer,
@@ -215,6 +216,12 @@ def set_arg(parser):
         "--print_loss_details",
         action="store_true",
         help="Print detailed loss components each batch for FDMPAScorer",
+    )
+    parser.add_argument(
+        "--warmup_steps",
+        type=int,
+        default=100,
+        help="Number of optimizer steps used for linear learning-rate warmup",
     )
     parser.add_argument(
         "--train_split",
@@ -744,6 +751,8 @@ def train(audio_model, train_loader, test_loader, args):
     prev_avg_mine_loss = None
     mine_bad_epochs = 0
     hc_aux_ema_state = {}
+    warm_up_step = max(0, args.warmup_steps)
+    warmup_started = False
 
     # Stage 1: MINE Pre-training
     if args.model == "FDMPAScorer" and args.mine_epochs > 0:
@@ -760,12 +769,24 @@ def train(audio_model, train_loader, test_loader, args):
         for mine_epoch in range(args.mine_epochs):
             audio_model.train()
             epoch_mine_losses = []
+            epoch_mi_values = []
+            epoch_mi_neg_count = 0
+            epoch_skipped_batches = 0
 
-            for batch_idx, data in enumerate(train_loader):
+            mine_progress = tqdm(
+                train_loader,
+                desc=f"MINE warmup {mine_epoch + 1}/{args.mine_epochs}",
+                total=len(train_loader),
+                unit="batch",
+                dynamic_ncols=True,
+                leave=True,
+            )
+            for batch_idx, data in enumerate(mine_progress):
                 # Unpack: path, label, feats, hc_feats, index
                 _, _, feats, hc_feats, _ = unpack_batch(data)
 
                 if hc_feats is None:
+                    epoch_skipped_batches += 1
                     continue
 
                 feats = feats.to(device)
@@ -796,6 +817,7 @@ def train(audio_model, train_loader, test_loader, args):
                 )
 
                 if not torch.isfinite(mine_loss):
+                    epoch_skipped_batches += 1
                     continue
 
                 mine_optimizer.zero_grad()
@@ -805,14 +827,30 @@ def train(audio_model, train_loader, test_loader, args):
                 )
                 mine_optimizer.step()
 
+                mi_value = mi_local_for_mine.detach().cpu().item()
                 epoch_mine_losses.append(mine_loss.item())
+                epoch_mi_values.append(mi_value)
+                if mi_value < 0:
+                    epoch_mi_neg_count += 1
+                mine_progress.set_postfix(
+                    updates=len(epoch_mine_losses),
+                    skipped=epoch_skipped_batches,
+                    avg_mi=f"{np.mean(epoch_mi_values):.4f}",
+                    neg=f"{epoch_mi_neg_count / max(1, len(epoch_mi_values)):.1%}",
+                    lr=f"{mine_optimizer.param_groups[0]['lr']:.2e}",
+                )
 
             if epoch_mine_losses:
-                print(
-                    f"MINE Epoch {mine_epoch + 1}/{args.mine_epochs}, Avg MINE Loss: {np.mean(epoch_mine_losses):.4f}"
+                avg_mi = float(np.mean(epoch_mi_values))
+                neg_ratio = epoch_mi_neg_count / max(1, len(epoch_mi_values))
+                tqdm.write(
+                    f"MINE warmup epoch {mine_epoch + 1}/{args.mine_epochs}: "
+                    f"updates={len(epoch_mine_losses)}, skipped={epoch_skipped_batches}, "
+                    f"avg_clamped_mi={avg_mi:.4f}, neg_mi_ratio={neg_ratio:.2%}, "
+                    f"mine_lr={mine_optimizer.param_groups[0]['lr']:.2e}"
                 )
             else:
-                print(
+                tqdm.write(
                     f"MINE Epoch {mine_epoch + 1}/{args.mine_epochs}, No valid losses found."
                 )
 
@@ -838,25 +876,36 @@ def train(audio_model, train_loader, test_loader, args):
         # Per-branch MI tracking: {branch: [list of values]}
         epoch_mi_local_per_branch = {"int": [], "rhy": [], "pro": []}
         epoch_mi_global_per_branch = {"int": [], "rhy": [], "pro": []}
-        epoch_hc_aux_batch_metrics = []
+        epoch_train_hc_aux_metrics = []
 
-        for batch_idx, data in enumerate(train_loader):
+        train_progress = tqdm(
+            train_loader,
+            desc=f"Train epoch {epoch + 1}/{args.n_epochs}",
+            total=len(train_loader),
+            unit="batch",
+            dynamic_ncols=True,
+            leave=True,
+        )
+        for batch_idx, data in enumerate(train_progress):
             audio_paths, utt_label, feats, hc_feats, indexs = unpack_batch(data)
             cluster_index = None
             if indexs is not None:
                 cluster_index = (indexs + 1).to(device)
 
-            # warmup
-            warm_up_step = 100
-            if global_step <= warm_up_step and global_step % 5 == 0:
+            if warm_up_step > 0 and global_step <= warm_up_step:
+                if not warmup_started:
+                    warmup_started = True
+                    tqdm.write(
+                        f"[LR_WARMUP] linear warmup: steps=0..{warm_up_step}, "
+                        f"target_lr={args.lr:.2e}, scheduler starts after warmup"
+                    )
                 warm_lr = (global_step / warm_up_step) * args.lr
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = warm_lr
-                print(
-                    "warm-up learning rate is {:f}".format(
-                        optimizer.param_groups[0]["lr"]
+                if global_step == warm_up_step:
+                    tqdm.write(
+                        "[LR_WARMUP] complete; scheduler will step at epoch end"
                     )
-                )
 
             feats = feats.to(device)
             if args.model == "FDMPAScorer":
@@ -1092,22 +1141,7 @@ def train(audio_model, train_loader, test_loader, args):
             if args.model in ["LayerWeightedHCSSLScorer", "SingleLayerHCSSLScorer"]:
                 hc_aux_metrics = compute_hc_aux_metrics(aux)
                 if hc_aux_metrics:
-                    epoch_hc_aux_batch_metrics.append(hc_aux_metrics)
-                    append_jsonl(
-                        os.path.join(exp_dir, "hc_aux_batch_metrics.jsonl"),
-                        {
-                            "epoch": epoch,
-                            "batch": batch_idx,
-                            "global_step": global_step,
-                            "split": "train",
-                            "metrics": hc_aux_metrics,
-                            "losses": hc_aux_loss_details,
-                        },
-                    )
-                    print(
-                        f"[HC_AUX_BATCH] epoch={epoch} batch={batch_idx} "
-                        f"{format_hc_aux_metrics(hc_aux_metrics)}"
-                    )
+                    epoch_train_hc_aux_metrics.append(hc_aux_metrics)
 
             optimizer.zero_grad()
             loss.backward()
@@ -1117,6 +1151,13 @@ def train(audio_model, train_loader, test_loader, args):
                 for p in audio_model.mine_parameters():
                     p.requires_grad = True
             global_step += 1
+            postfix = {
+                "step": global_step,
+                "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
+            }
+            if warm_up_step > 0 and global_step <= warm_up_step:
+                postfix["warmup"] = f"{global_step / warm_up_step:.0%}"
+            train_progress.set_postfix(postfix)
 
         # Print MI statistics for FDMPAScorer
         if args.model == "FDMPAScorer" and epoch_mi_local_values:
@@ -1155,13 +1196,11 @@ def train(audio_model, train_loader, test_loader, args):
                     mine_bad_epochs = 0
             prev_avg_mine_loss = avg_mine_loss
 
-        train_batch_hc_aux_metrics = aggregate_hc_aux_metrics(
-            epoch_hc_aux_batch_metrics
-        )
-        if train_batch_hc_aux_metrics:
+        train_hc_aux_metrics = aggregate_hc_aux_metrics(epoch_train_hc_aux_metrics)
+        if train_hc_aux_metrics:
             print(
-                f"[HC_AUX_EPOCH] epoch={epoch} split=train_batches "
-                f"{format_hc_aux_metrics(train_batch_hc_aux_metrics)}"
+                f"[HC_AUX_EPOCH] epoch={epoch} split=train "
+                f"{format_hc_aux_metrics(train_hc_aux_metrics)}"
             )
 
         print("start validation")
@@ -1226,10 +1265,10 @@ def train(audio_model, train_loader, test_loader, args):
                     f"Test MSE: {te_mse_list[i]:.3f}, {bcolors.CYAN}CORR: {te_corr_list[i]:.3f}{bcolors.ENDC}"
                 )
 
-        if train_batch_hc_aux_metrics or tr_hc_aux_metrics or te_hc_aux_metrics:
+        if train_hc_aux_metrics or tr_hc_aux_metrics or te_hc_aux_metrics:
             hc_aux_epoch_record = {
                 "epoch": epoch,
-                "train_batches": train_batch_hc_aux_metrics,
+                "train": train_hc_aux_metrics,
                 "train_eval": tr_hc_aux_metrics,
                 "test": te_hc_aux_metrics,
             }
@@ -1404,7 +1443,15 @@ def validate(
     hc_aux_metrics_list = []
 
     with torch.no_grad():
-        for batch_idx, data in enumerate(val_loader):
+        val_progress = tqdm(
+            val_loader,
+            desc=f"Validate {split_name}",
+            total=len(val_loader),
+            unit="batch",
+            dynamic_ncols=True,
+            leave=True,
+        )
+        for batch_idx, data in enumerate(val_progress):
             audio_paths, utt_label, feats, hc_feats, indexs = unpack_batch(data)
             cluster_index = None
             if indexs is not None:
