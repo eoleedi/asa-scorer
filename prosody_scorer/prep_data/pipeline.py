@@ -4,9 +4,8 @@ Data preparation pipeline for fluency scoring datasets.
 
 This pipeline orchestrates the complete data preparation workflow:
 1. Export HuggingFace dataset to local format (optional)
-2. Extract HuBERT features from audio
-3. Train K-Means clustering model
-4. Evaluate clustering quality
+2. Train K-Means from HuBERT features extracted on the fly
+3. Evaluate clustering quality with on-the-fly features
 
 Usage:
     python pipeline.py <dataset_dir> [options]
@@ -17,9 +16,9 @@ Examples:
         --feat_dir data/ezai-championship2023 \\
         --output_dir exp/kmeans/ezai-championship2023
     
-    # Run only stages 2-3 (feature extraction and kmeans)
+    # Run only K-Means training and evaluation
     python pipeline.py data/ezai-championship2023/ezai-champ2023 \\
-        --stage 2 --stop_stage 3
+        --stage 1 --stop_stage 2
     
     # Export HuggingFace dataset and run full pipeline
     python pipeline.py data/ezai-championship2023/ezai-champ2023 \\
@@ -34,7 +33,6 @@ import sys
 
 from .stages import (
     export_hf_dataset,
-    extract_features,
     train_kmeans_model,
     evaluate_clustering,
 )
@@ -59,7 +57,7 @@ def main():
         "--feat_dir",
         type=str,
         default="../data",
-        help="Directory for features and labels (default: ../data)",
+        help="Directory for labels and cluster metadata (default: ../data)",
     )
     parser.add_argument(
         "--output_dir",
@@ -73,13 +71,13 @@ def main():
         "--stage",
         type=int,
         default=1,
-        help="Starting stage (0=export HF dataset, 1=extract features, 2=train kmeans, 3=evaluate) (default: 1)",
+        help="Starting stage (0=export HF dataset, 1=train kmeans, 2=evaluate) (default: 1)",
     )
     parser.add_argument(
         "--stop_stage",
         type=int,
-        default=3,
-        help="Stopping stage (default: 3)",
+        default=2,
+        help="Stopping stage (default: 2)",
     )
 
     # Stage 0: HuggingFace dataset export (optional)
@@ -107,27 +105,21 @@ def main():
         help="Score aspects to extract (default: accuracy completeness fluency prosodic total)",
     )
 
-    # Stage 1: Feature extraction
+    # On-the-fly feature extraction settings
     parser.add_argument(
         "--device",
         type=str,
         default="cuda",
-        help="Device for feature extraction (default: cuda)",
+        help="Device for on-the-fly feature extraction (default: cuda)",
     )
     parser.add_argument(
         "--layer",
         type=int,
         default=14,
-        help="HuBERT layer to extract (default: 14)",
-    )
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="hubert_large",
-        help="Model name for feature extraction (default: hubert_large)",
+        help="HuBERT layer to use for K-Means features (default: 14)",
     )
 
-    # Stage 2: K-Means training
+    # Stage 1: K-Means training
     parser.add_argument(
         "--n_clusters",
         type=int,
@@ -145,6 +137,12 @@ def main():
         type=int,
         default=10000,
         help="MiniBatch K-Means batch size (default: 10000)",
+    )
+    parser.add_argument(
+        "--feature_batch_size",
+        type=int,
+        default=8,
+        help="Audio batch size for on-the-fly HuBERT extraction (default: 8)",
     )
     parser.add_argument(
         "--n_init",
@@ -167,8 +165,8 @@ def main():
     output_dir = Path(args.output_dir)
 
     # Validate stage range
-    if args.stage < 0 or args.stop_stage < args.stage or args.stop_stage > 3:
-        print("Error: Invalid stage range. Stage must be 0-3 and stop_stage >= stage.")
+    if args.stage < 0 or args.stop_stage < args.stage or args.stop_stage > 2:
+        print("Error: Invalid stage range. Stage must be 0-2 and stop_stage >= stage.")
         sys.exit(1)
 
     # Validate HF dataset requirement (allow None for backward compatibility with local datasets)
@@ -194,7 +192,7 @@ def main():
     print("Data Preparation Pipeline")
     print("=" * 70)
     print(f"Dataset directory: {dataset_dir}")
-    print(f"Feature directory: {feat_dir}")
+    print(f"Data directory:    {feat_dir}")
     print(f"Output directory:  {output_dir}")
     print(f"Stages to run:     {args.stage} -> {args.stop_stage}")
     print("=" * 70)
@@ -218,36 +216,10 @@ def main():
             print("=" * 70)
             print("Assuming dataset is already in local format at:", dataset_dir)
 
-    # Stage 1: Extract features
+    # Stage 1: Train K-Means
     if args.stage <= 1 <= args.stop_stage:
         print("\n" + "=" * 70)
-        print("STAGE 1: Extracting HuBERT features")
-        print("=" * 70)
-
-        print("\nExtracting TRAINING features...")
-        extract_features(
-            dataset_dir=dataset_dir,
-            feat_dir=feat_dir,
-            split="train",
-            device=args.device,
-            layer=args.layer,
-            model_name=args.model_name,
-        )
-
-        print("\nExtracting TEST features...")
-        extract_features(
-            dataset_dir=dataset_dir,
-            feat_dir=feat_dir,
-            split="test",
-            device=args.device,
-            layer=args.layer,
-            model_name=args.model_name,
-        )
-
-    # Stage 2: Train K-Means
-    if args.stage <= 2 <= args.stop_stage:
-        print("\n" + "=" * 70)
-        print("STAGE 2: Training K-Means clustering")
+        print("STAGE 1: Training K-Means with on-the-fly HuBERT features")
         print("=" * 70)
         train_kmeans_model(
             dataset_dir=dataset_dir,
@@ -258,17 +230,23 @@ def main():
             batch_size=args.kmeans_batch_size,
             n_init=args.n_init,
             random_state=args.random_state,
+            feature_batch_size=args.feature_batch_size,
+            device=args.device,
+            layer=args.layer,
         )
 
-    # Stage 3: Evaluate clustering
-    if args.stage <= 3 <= args.stop_stage:
+    # Stage 2: Evaluate clustering
+    if args.stage <= 2 <= args.stop_stage:
         print("\n" + "=" * 70)
-        print("STAGE 3: Evaluating clustering quality")
+        print("STAGE 2: Evaluating clustering quality with on-the-fly features")
         print("=" * 70)
         evaluate_clustering(
             dataset_dir=dataset_dir,
             feat_dir=feat_dir,
             model_dir=output_dir,
+            feature_batch_size=args.feature_batch_size,
+            device=args.device,
+            layer=args.layer,
         )
 
     print("\n" + "=" * 70)
@@ -278,10 +256,7 @@ def main():
     print(
         f"  - Labels:           {feat_dir}/tr_label_utt.npy, {feat_dir}/te_label_utt.npy"
     )
-    print(f"  - Features:         {feat_dir}/tr_feats.pkl, {feat_dir}/te_feats.pkl")
-    print(
-        f"  - Cluster indices:  {feat_dir}/tr_cluster_index.pkl, {feat_dir}/te_cluster_index.pkl"
-    )
+    print(f"  - Cluster centers:  {feat_dir}/cluster_centers.pkl")
     print(f"  - K-means model:    {output_dir}/kmeans_model.joblib")
     print("\nNext step: Run training with your training script")
     print("=" * 70)

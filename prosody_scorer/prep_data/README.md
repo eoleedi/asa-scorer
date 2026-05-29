@@ -19,9 +19,7 @@ bash run_prep_ezai-champ2023.sh
 This will:
 1. Download the dataset from HuggingFace
 2. Export to wav files and labels
-3. Extract HuBERT acoustic features
-4. Train k-means clustering (50 clusters)
-5. Generate cluster indices
+3. Train k-means clustering from HuBERT features extracted on the fly
 
 ### For SpeechOcean762 Dataset
 
@@ -71,40 +69,30 @@ For SO762, reads wav.scp and scores.json to create label arrays.
 python3 gen_seq_data_utt.py /path/to/speechocean762 scores.json
 ```
 
-### 3. Feature Extraction
-**Script:** `gen_seq_acoustic_feat.py`
-
-Extracts HuBERT-Large (layer 14) features from all audio files.
-
-```bash
-python3 gen_seq_acoustic_feat.py /path/to/dataset --feat_dir ../data
-```
-
-Outputs:
-- `../data/tr_feats.pkl` - Training features dictionary
-- `../data/te_feats.pkl` - Test features dictionary
-
-### 4. K-Means Clustering
+### 3. K-Means Clustering
 **Script:** `train_kmeans.py`
 
-Trains MiniBatch K-Means on training features (50 clusters by default).
+Trains MiniBatch K-Means from HuBERT-Large features extracted on the fly from
+audio batches. It does not write feature or cluster-index pickles.
 
 ```bash
-python3 train_kmeans.py /path/to/dataset --feat_dir ../data --output_dir ../exp/kmeans
+python3 train_kmeans.py /path/to/dataset \
+    --feat_dir ../data \
+    --output_dir ../exp/kmeans \
+    --feature_batch_size 8
 ```
 
 Outputs:
 - `../exp/kmeans/kmeans_model.joblib` - Trained k-means model
-- `../data/tr_cluster_index.pkl` - Training cluster assignments
-- `../data/te_cluster_index.pkl` - Test cluster assignments
+- `../data/cluster_centers.pkl` - K-means cluster centers
 
-### 5. Clustering Evaluation
-**Script:** `kmeans_metric.py`
+### 4. Clustering Evaluation
+**Script:** `evaluate.py`
 
-Evaluates k-means clustering quality.
+Evaluates k-means clustering quality by extracting HuBERT features on the fly.
 
 ```bash
-python3 kmeans_metric.py /path/to/dataset --feat_dir ../data
+python3 evaluate.py /path/to/dataset --feat_dir ../data --model_dir ../exp/kmeans
 ```
 
 ## Output Files
@@ -115,10 +103,6 @@ After running the preparation pipeline, you'll have:
 data/
 ├── tr_label_utt.npy          # Training labels (N x 5): [acc, cpn, flu, psd, ttl]
 ├── te_label_utt.npy          # Test labels
-├── tr_feats.pkl              # Training HuBERT features (dict: path -> features)
-├── te_feats.pkl              # Test HuBERT features
-├── tr_cluster_index.pkl      # Training cluster assignments
-├── te_cluster_index.pkl      # Test cluster assignments
 └── cluster_centers.pkl       # K-means cluster centers
 
 exp/kmeans/
@@ -138,14 +122,14 @@ hf_exports/                   # (HuggingFace datasets only)
 ## Notes
 
 - **ezai-championship2023**: Uses "test" split for both training and testing (full dataset)
-- **Feature extraction** requires CUDA for speed (falls back to CPU if unavailable)
+- **On-the-fly feature extraction** requires CUDA for speed (falls back to CPU if unavailable)
 - **K-means training** may take several minutes on large datasets
 - All scripts use HuBERT-Large layer 14 features (1024 dimensions)
 
 ## Troubleshooting
 
 **Out of memory during feature extraction:**
-- Reduce batch size or process in smaller chunks
+- Reduce `--feature_batch_size`
 - Use CPU instead of GPU (slower but uses less memory)
 
 **Missing dependencies:**

@@ -2,7 +2,6 @@
 
 from .stages import (
     export_hf_dataset,
-    extract_features,
     train_kmeans_model,
     evaluate_clustering,
 )
@@ -19,7 +18,6 @@ __version__ = "0.1.0"
 __all__ = [
     # Stage functions
     "export_hf_dataset",
-    "extract_features",
     "train_kmeans_model",
     "evaluate_clustering",
     # Utilities
